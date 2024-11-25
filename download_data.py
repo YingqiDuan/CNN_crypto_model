@@ -30,22 +30,19 @@ ALLOWED_PERIODS = [
 @retry(wait=wait_fixed(5), stop=stop_after_attempt(3))
 def download_file(url, local_filename):
     if os.path.exists(local_filename):
-        print(f"{local_filename} 已存在，跳过下载。")
         return local_filename
     try:
         with requests.get(url, stream=True) as response:
             response.raise_for_status()
             total_size = int(response.headers.get("content-length", 0))
             with open(local_filename, "wb") as f, tqdm(
-                total=total_size, unit="iB", unit_scale=True, desc=local_filename
+                total=total_size, unit="iB", unit_scale=True, desc="下载中"
             ) as t:
                 for chunk in response.iter_content(8192):
                     f.write(chunk)
                     t.update(len(chunk))
-        print(f"文件已成功下载: {local_filename}")
         return local_filename
-    except requests.RequestException as e:
-        print(f"下载失败: {e}")
+    except requests.RequestException:
         return None
 
 
@@ -61,9 +58,8 @@ def unzip_file(zip_path, extract_to, trading_pair, period):
                     ) as dst:
                         shutil.copyfileobj(src, dst)
         os.remove(zip_path)
-        print(f"解压完成并删除ZIP: {zip_path}")
     except zipfile.BadZipFile:
-        print(f"无效的ZIP文件: {zip_path}")
+        pass
 
 
 def generate_url(trading_pair, period, date_str):
@@ -114,11 +110,11 @@ def main():
 
     with ThreadPoolExecutor(max_workers=min(10, len(tasks))) as executor:
         futures = [executor.submit(process_task, task) for task in tasks]
-        for _ in tqdm(as_completed(futures), total=len(futures), desc="总体进度"):
-            pass
+        with tqdm(total=len(futures), desc="总体进度") as progress:
+            for _ in as_completed(futures):
+                progress.update(1)
 
     shutil.rmtree("downloads", ignore_errors=True)
-    print("所有任务完成。")
 
 
 def process_task(task):
