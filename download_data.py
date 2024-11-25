@@ -30,19 +30,18 @@ ALLOWED_PERIODS = [
 @retry(wait=wait_fixed(5), stop=stop_after_attempt(3))
 def download_file(url, local_filename):
     if os.path.exists(local_filename):
+        print(f"{local_filename} 已存在，跳过下载。")
         return local_filename
     try:
         with requests.get(url, stream=True) as response:
             response.raise_for_status()
-            total_size = int(response.headers.get("content-length", 0))
-            with open(local_filename, "wb") as f, tqdm(
-                total=total_size, unit="iB", unit_scale=True, desc="下载中"
-            ) as t:
+            with open(local_filename, "wb") as f:
                 for chunk in response.iter_content(8192):
-                    f.write(chunk)
-                    t.update(len(chunk))
+                    if chunk:
+                        f.write(chunk)
         return local_filename
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"下载失败: {e}")
         return None
 
 
@@ -59,7 +58,7 @@ def unzip_file(zip_path, extract_to, trading_pair, period):
                         shutil.copyfileobj(src, dst)
         os.remove(zip_path)
     except zipfile.BadZipFile:
-        pass
+        print(f"无效的ZIP文件: {zip_path}")
 
 
 def generate_url(trading_pair, period, date_str):
@@ -98,23 +97,24 @@ def main():
             for date_str in dates:
                 url, filename = generate_url(trading_pair, period, date_str)
                 local_path = os.path.join("downloads", trading_pair, period, filename)
+                extract_dir = os.path.join("extracted_csv_files", trading_pair, period)
                 tasks.append(
                     (
                         trading_pair,
                         period,
                         url,
                         local_path,
-                        os.path.join("extracted_csv_files", trading_pair, period),
+                        extract_dir,
                     )
                 )
 
     with ThreadPoolExecutor(max_workers=min(10, len(tasks))) as executor:
         futures = [executor.submit(process_task, task) for task in tasks]
-        with tqdm(total=len(futures), desc="总体进度") as progress:
-            for _ in as_completed(futures):
-                progress.update(1)
+        for _ in tqdm(as_completed(futures), total=len(futures), desc="总体进度"):
+            pass
 
     shutil.rmtree("downloads", ignore_errors=True)
+    print("所有任务完成。")
 
 
 def process_task(task):
