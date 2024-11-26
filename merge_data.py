@@ -72,7 +72,7 @@ def merge_csv_files(
     print(f"所有文件已成功合并并保存到 {output_file}")
 
 
-def main():
+def merge_data():
     trading_pairs = input(
         "请输入交易对（多个交易对请用逗号分隔，例如 BTCUSDT,ETHUSDT）："
     )
@@ -101,4 +101,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    merge_data()
