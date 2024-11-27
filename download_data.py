@@ -141,8 +141,7 @@ def process_task(task: tuple) -> tuple:
     return download_status, unzip_status
 
 
-def download_data():
-    days, trading_pairs, periods = get_user_input()
+def download_data(days, trading_pairs, periods):
     dates = [
         (datetime.today() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)
     ]
@@ -195,4 +194,5 @@ def download_data():
 
 
 if __name__ == "__main__":
-    download_data()
+    days, trading_pairs, periods = get_user_input()
+    download_data(days, trading_pairs, periods)

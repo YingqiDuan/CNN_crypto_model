@@ -72,20 +72,17 @@ def merge_csv_files(
     print(f"所有文件已成功合并并保存到 {output_file}")
 
 
-def merge_data():
-    trading_pairs = input(
-        "请输入交易对（多个交易对请用逗号分隔，例如 BTCUSDT,ETHUSDT）："
-    )
-    trading_pairs = [
-        pair.strip().upper() for pair in trading_pairs.split(",") if pair.strip()
-    ]
+def merge_data(trading_pairs, periods):
+    if isinstance(trading_pairs, str):
+        trading_pairs = [
+            pair.strip().upper() for pair in trading_pairs.split(",") if pair.strip()
+        ]
 
     if not trading_pairs:
         print("未输入有效的交易对。程序将退出。")
         return
-
-    periods = input("请输入周期（多个周期请用逗号分隔，例如 1m,5m）：")
-    periods = [period.strip() for period in periods.split(",") if period.strip()]
+    if isinstance(periods, str):
+        periods = [period.strip() for period in periods.split(",") if period.strip()]
 
     if not periods:
         print("未输入有效的周期。程序将退出。")
@@ -101,4 +98,9 @@ def merge_data():
 
 
 if __name__ == "__main__":
-    merge_data()
+    trading_pairs = input(
+        "请输入交易对（多个交易对请用逗号分隔，例如 BTCUSDT,ETHUSDT）："
+    )
+    periods = input("请输入周期（多个周期请用逗号分隔，例如 1m,5m）：")
+
+    merge_data(trading_pairs, periods)
