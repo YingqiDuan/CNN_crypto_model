@@ -1,4 +1,4 @@
-open_time,open,high,low,close,volume,quote_volume,count,taker_buy_volume,taker_buy_quote_volume
+open_time,open,high,low,close,volume,quote_asset_volume,number_of_trades,taker_buy_base_asset_volume,taker_buy_quote_asset_volume
 2023-11-28 00:00:00,37234.4,37338.0,37176.3,37248.3,9422.842,351122098.76465,93949,4738.042,176569214.60655
 2023-11-28 01:00:00,37248.4,37255.9,37151.0,37190.6,4910.4,182678887.3397,61338,2277.043,84710495.4873
 2023-11-28 02:00:00,37190.5,37201.8,37106.0,37165.0,4852.422,180270096.7844,54807,2105.194,78213821.0644
