@@ -384,6 +384,8 @@ class DataProcessor:
             for idx in range(100, len(df)):
                 # 提取当前索引的前 100 行
                 matrix = df.iloc[idx - 100 : idx].reset_index(drop=True)
+                # 删除时间列
+                matrix = matrix.drop(columns=["open_time"])
 
                 # 获取每个需要归一化列的第一个值
                 first_values = {}
