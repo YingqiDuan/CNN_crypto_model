@@ -1,7 +1,5 @@
 from cnn import (
-    SimpleCNN,
-    load_and_process_pkl,
-    map_labels,
+    load_multiple_pkls,
     standardize_samples,
     load_model,
     predict,
@@ -18,7 +16,7 @@ def main():
     file_path = "merged_csv/BTCUSDT_1h_2023-11-29_to_2024-11-26_samples_with_labels.pkl"  #  .pkl 文件路径
 
     # 加载和处理数据
-    samples, labels = load_and_process_pkl(file_path)
+    samples, labels = load_multiple_pkls(file_path)
     if samples is None or labels is None:
         return
 
