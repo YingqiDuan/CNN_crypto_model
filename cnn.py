@@ -281,7 +281,7 @@ def train_model(
     device,
     epochs=20,
     save_path="simple_cnn_model.pth",
-    patience=5,
+    patience=20,
 ):
     """
     训练模型并在每个 epoch 后保存最佳模型。
