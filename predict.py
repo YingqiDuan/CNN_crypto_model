@@ -13,7 +13,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 文件路径
-    file_path = "merged_csv/BTCUSDT_1h_2023-11-29_to_2024-11-26_samples_with_labels.pkl"  #  .pkl 文件路径
+    file_path = "merged_csv\BTCUSDT_4h_2023-11-30_to_2024-11-27_samples_with_labels.pkl"  #  .pkl 文件路径
 
     # 加载和处理数据
     samples, labels = load_multiple_pkls(file_path)
@@ -23,7 +23,7 @@ def main():
     # 标准化样本
     samples = standardize_samples(samples)
     # 加载模型
-    model_path = "simple_cnn_model.pth"
+    model_path = "simple_cnn_model_2.pth"
     model = load_model(model_path, device)
 
     # 选择一个样本进行预测

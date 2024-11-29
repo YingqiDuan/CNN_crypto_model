@@ -1,1 +1,4 @@
 merged_csv/
+extracted_csv_files/
+downloads/
+*.pth

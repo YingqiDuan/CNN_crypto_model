@@ -217,7 +217,7 @@ class SimpleCNN(nn.Module):
         self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3)
         self.bn2 = nn.BatchNorm2d(32)  # 批归一化
         # 丢弃层
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=0.3)
         # 全连接层
         self.fc1 = nn.Linear(32 * 23 * 5, 128)  # 根据新的输出尺寸调整
         self.fc2 = nn.Linear(128, 3)  # 3 个类别
@@ -551,8 +551,8 @@ def main():
     model, criterion, optimizer = define_model(y_train, device)
 
     # 训练模型
-    epochs = 20
-    save_path = "simple_cnn_model.pth"
+    epochs = 50
+    save_path = "simple_cnn_model_4.pth"
     train_losses = train_model(
         model,
         train_loader,
