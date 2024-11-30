@@ -4,3 +4,4 @@ downloads/
 *.pth
 runs/
 models/
+*.csv

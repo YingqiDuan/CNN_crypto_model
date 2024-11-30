@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import time
 from get_trading_pairs import coins
+import os
+from datetime import datetime
 
 
 def get_data(client, coin, interval, days):
@@ -116,6 +118,22 @@ def main():
         print(f"Error initializing UMFutures client: {e}")
         return
 
+    # 定义CSV文件路径
+    csv_file = "predictions.csv"
+
+    # 获取当前时间作为预测时间
+    prediction_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 检查CSV文件是否存在
+    if os.path.exists(csv_file):
+        df_predictions = pd.read_csv(csv_file, index_col=0)
+    else:
+        # 初始化DataFrame，索引为交易对
+        df_predictions = pd.DataFrame(index=coins)
+
+    # 添加当前预测时间作为新的列
+    df_predictions[prediction_time] = 0  # 先填充0，后面再赋值
+
     for coin in coins:
         # 获取数据
         df = get_data(um_futures_client, coin, interval, days)
@@ -144,10 +162,22 @@ def main():
             print(f"Error standardizing samples for {coin}: {e}")
             continue
 
-        predicted_label = predict(model, sample, device)
+        # 进行预测
+        try:
+            predicted_label = predict(model, sample, device)
+        except Exception as e:
+            print(f"Error predicting for {coin}: {e}")
+            continue
 
-        if predicted_label == 1 or predicted_label == -1:
+        if predicted_label in [1, -1]:
             print(f"{coin} 预测: {predicted_label}")
+            df_predictions.at[coin, prediction_time] = predicted_label
+
+        # 保存预测结果到CSV
+        try:
+            df_predictions.to_csv(csv_file)
+        except Exception as e:
+            print(f"Error saving predictions to CSV: {e}")
 
 
 if __name__ == "__main__":
