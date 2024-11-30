@@ -14,6 +14,7 @@ import numpy as np
 
 class DataProcessor:
     def __init__(self):
+        self.session = requests.Session()
         self.ALLOWED_PERIODS = [
             "1m",
             "3m",
@@ -42,17 +43,29 @@ class DataProcessor:
         :return: 下载状态 ('exists', 'downloaded', 'failed')
         """
         if local_path.exists():
-            return "exists"
+            # 如果文件大小大于0，认为已存在
+            if local_path.stat().st_size > 0:
+                return "exists"
+            else:
+                # 如果文件为空，删除并重新下载
+                local_path.unlink()
         try:
-            with requests.get(url, stream=True) as response:
+            with self.session.get(url, stream=True, timeout=30) as response:
                 response.raise_for_status()
                 with open(local_path, "wb") as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
+            # 下载完成后再次检查文件大小
+            if local_path.stat().st_size == 0:
+                print(f"下载的文件 {local_path} 为空，可能下载失败。")
+                local_path.unlink()
+                return "failed"
             return "downloaded"
         except requests.RequestException:
-            return "failed"
+            if local_path.exists():
+                local_path.unlink()
+        return "failed"
 
     def unzip_file(
         self, zip_path: Path, extract_dir: Path, trading_pair: str, period: str
@@ -68,6 +81,10 @@ class DataProcessor:
         """
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                if not zip_ref.namelist():
+                    print(f"ZIP 文件 {zip_path} 中没有任何文件。")
+                    zip_path.unlink()
+                    return "bad_zip"
                 date_str = zip_path.stem.split("-")[-1]
                 for file in zip_ref.namelist():
                     if file.endswith(".csv"):
@@ -76,11 +93,17 @@ class DataProcessor:
                         dst_path = extract_dir / new_filename
                         with zip_ref.open(file) as src, open(dst_path, "wb") as dst:
                             shutil.copyfileobj(src, dst)
+                        if dst_path.stat().st_size == 0:
+                            print(f"解压得到的文件 {dst_path} 为空，已删除。")
+                            dst_path.unlink()
             zip_path.unlink()
             return "unzipped"
         except zipfile.BadZipFile:
+            print(f"ZIP 文件 {zip_path} 已损坏，无法解压。")
+            zip_path.unlink()
             return "bad_zip"
         except Exception:
+            print(f"解压 ZIP 文件 {zip_path} 时出错: {e}")
             return "failed"
 
     def generate_url(self, trading_pair: str, period: str, date_str: str) -> tuple:
@@ -174,7 +197,8 @@ class DataProcessor:
         failed_downloads = []
         failed_unzips = []
 
-        with ThreadPoolExecutor(max_workers=min(10, len(tasks))) as executor:
+        max_workers = min(10, len(tasks))  # 根据需要调整
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(self.process_task, task): task for task in tasks}
             for future in tqdm(
                 as_completed(futures), total=len(futures), desc="总体进度"
@@ -228,6 +252,23 @@ class DataProcessor:
 
         print(f"找到 {len(csv_files)} 个 CSV 文件，开始合并...")
 
+        dataframes = []
+        for file in csv_files:
+            try:
+                df = pd.read_csv(file)
+                if df.empty:
+                    print(f"文件 {file} 是空的，已跳过。")
+                    continue
+                # 删除空行
+                df.dropna(how="all", inplace=True)
+                dataframes.append(df)
+            except Exception as e:
+                print(f"读取文件 {file} 时出错: {e}")
+
+        if not dataframes:
+            print("没有有效的 CSV 文件可供合并。")
+            return None
+
         try:
             combined_df = pd.concat(
                 (pd.read_csv(file) for file in csv_files),
@@ -236,6 +277,9 @@ class DataProcessor:
         except Exception as e:
             print(f"合并 CSV 文件时出错: {e}")
             return None
+
+        # 删除合并后的 DataFrame 中的空行
+        combined_df.dropna(how="all", inplace=True)
 
         # 根据 Binance 数据格式，调整列名
         required_columns = [
@@ -353,7 +397,15 @@ class DataProcessor:
         try:
             # 读取 CSV 文件
             df = pd.read_csv(csv_path)
+            # 删除空行
+            df.dropna(how="all", inplace=True)
+
             df.reset_index(drop=True, inplace=True)
+
+            # 检查是否还有数据
+            if df.empty:
+                print(f"CSV 文件 {csv_path} 为空或只有空行，跳过处理。")
+                return
 
             # 初始化存储样本和标签的列表
             samples = []
@@ -387,6 +439,10 @@ class DataProcessor:
                 # 删除时间列
                 matrix = matrix.drop(columns=["open_time"])
 
+                # 如果样本中存在任何空值，跳过该样本
+                if matrix.isnull().values.any():
+                    continue
+
                 # 获取每个需要归一化列的第一个值
                 first_values = {}
                 skip_sample = False
@@ -418,6 +474,9 @@ class DataProcessor:
                 # 保存样本和对应的 label
                 samples.append(matrix)
                 labels.append(label)
+
+            if not samples:
+                return
 
             # 保存样本和标签到文件
             with open(save_path, "wb") as f:

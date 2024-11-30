@@ -56,9 +56,9 @@ def load_multiple_pkls(file_paths):
             all_samples.append(samples)
             all_labels.append(labels)
 
-            print(
-                f"成功加载文件: {file_path}, Samples: {samples.shape}, Labels: {labels.shape}"
-            )
+            # print(
+            #     f"成功加载文件: {file_path}, Samples: {samples.shape}, Labels: {labels.shape}"
+            # )
 
         except FileNotFoundError:
             print(f"文件未找到: {file_path}")
@@ -521,11 +521,26 @@ def main():
     if samples is None or labels is None:
         return
 
+    print(f"Number of NaNs in samples: {np.isnan(samples).sum()}")
+    print(f"Number of Infs in samples: {np.isinf(samples).sum()}")
+
+    # 如果存在 NaN 或 Inf，删除这些样本
+    if np.isnan(samples).any() or np.isinf(samples).any():
+        nan_indices = np.unique(np.argwhere(np.isnan(samples))[:, 0])
+        inf_indices = np.unique(np.argwhere(np.isinf(samples))[:, 0])
+        invalid_indices = np.unique(np.concatenate((nan_indices, inf_indices)))
+        print(f"删除包含 NaN 或 Inf 的样本数量: {len(invalid_indices)}")
+        samples = np.delete(samples, invalid_indices, axis=0)
+        labels = np.delete(labels, invalid_indices, axis=0)
+
     # 映射标签
     labels = map_labels(labels)
 
     # 标准化样本
     samples = standardize_samples(samples)
+
+    print(f"Number of NaNs in standardized samples: {np.isnan(samples).sum()}")
+    print(f"Number of Infs in standardized samples: {np.isinf(samples).sum()}")
 
     # 拆分数据
     X_train, X_val, X_test, y_train, y_val, y_test = split_train_val_test(
@@ -552,7 +567,7 @@ def main():
 
     # 训练模型
     epochs = 50
-    save_path = "simple_cnn_model_4.pth"
+    save_path = "simple_cnn_model_2.pth"
     train_losses = train_model(
         model,
         train_loader,
