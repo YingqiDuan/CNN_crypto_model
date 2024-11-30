@@ -297,7 +297,7 @@ def train_model(
     optimizer,
     device,
     epochs=20,
-    save_path="simple_cnn_model.pth",
+    save_path="cnn_model.pth",
     patience=5,
 ):
     """
@@ -665,26 +665,22 @@ def predict(model, sample, device):
         device: 训练设备（CPU 或 GPU）。
 
     返回:
-        int: 预测的标签类别（0, 1, 2）。
+        int: 预测的标签类别（-1, 0, 1）。
     """
     model.eval()
+    # 转换为张量并添加 batch 和 channel 维度
+    sample_tensor = torch.tensor(sample, dtype=torch.float32).unsqueeze(0).to(device)
     with torch.no_grad():
-        # 转换为张量并添加 batch 和 channel 维度
-        sample_tensor = (
-            torch.tensor(sample, dtype=torch.float32)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .to(device)
-        )
 
         # 前向传播
         output = model(sample_tensor)
-        _, predicted = torch.max(output, 1)
+        _, predicted_label = torch.max(output, 1)
+        predicted_label = predicted_label.cpu().numpy()[0]
 
         # 标签映射回原始标签
         label_mapping_reverse = {0: -1, 1: 0, 2: 1}
 
-        return label_mapping_reverse[predicted.item()]
+        return label_mapping_reverse[predicted_label.item()]
 
 
 # 10. 主函数
@@ -749,7 +745,7 @@ def main():
 
     # 训练模型
     epochs = 100
-    save_path = "simple_cnn_model_3.pth"
+    save_path = "cnn_model.pth"
     history = train_model(
         model,
         train_loader,
