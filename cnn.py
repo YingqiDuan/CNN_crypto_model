@@ -4,18 +4,24 @@ import pickle
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_auc_score
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
+import seaborn as sns
+from torch.utils.tensorboard import SummaryWriter
 
 
-# 1. 数据加载与预处理
+# 1. Data Loading and Preprocessing
 def load_multiple_pkls(file_paths):
     """
     读取多个 .pkl 文件，提取 'samples' 和 'labels'，合并所有数据。
@@ -207,43 +213,54 @@ def split_train_val_test(samples, labels, val_size=0.1, test_size=0.1, random_st
 
 
 # 3. 定义卷积神经网络模型
-class SimpleCNN(nn.Module):
+class CNN(nn.Module):
     def __init__(self):
-        super(SimpleCNN, self).__init__()
-        # 卷积层1：输入通道=1，输出通道=16，卷积核大小=3
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3)
-        self.bn1 = nn.BatchNorm2d(16)  # 批归一化
-        # 卷积层2：输入通道=16，输出通道=32，卷积核大小=3
-        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3)
-        self.bn2 = nn.BatchNorm2d(32)  # 批归一化
+        super(CNN, self).__init__()
+        # 卷积层1：输入通道=1，输出通道=32，卷积核大小=3
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3)
+        self.bn1 = nn.BatchNorm2d(32)  # 批归一化
+        # 卷积层2：输入通道=32，输出通道=64，卷积核大小=3
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.bn2 = nn.BatchNorm2d(64)  # 批归一化
+        # 卷积层3：输入通道=64，输出通道=128，卷积核大小=3
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3)
+        self.bn3 = nn.BatchNorm2d(128)  # 批归一化
         # 丢弃层
-        self.dropout = nn.Dropout(p=0.3)
+        self.dropout = nn.Dropout(p=0.5)
         # 全连接层
-        self.fc1 = nn.Linear(32 * 23 * 5, 128)  # 根据新的输出尺寸调整
-        self.fc2 = nn.Linear(128, 3)  # 3 个类别
+        self.fc1 = nn.Linear(128 * 10 * 3, 256)  # 根据新的输出尺寸调整
+        self.fc2 = nn.Linear(256, 3)  # 3 个类别
 
     def forward(self, x):
         # 卷积层1 -> 批归一化 -> ReLU
-        x = F.relu(self.bn1(self.conv1(x)))  # 输出形状: (batch_size, 16, 98, 7)
+        x = F.relu(self.bn1(self.conv1(x)))  # 输出形状: (batch_size, 32, 98, 7)
 
         # 池化层1：仅在高度维度上进行池化
         x = F.max_pool2d(
             x, kernel_size=(2, 1), stride=(2, 1)
-        )  # 输出形状: (batch_size, 16, 49, 7)
+        )  # 输出形状: (batch_size, 32, 49, 7)
 
         # 卷积层2 -> 批归一化 -> ReLU
-        x = F.relu(self.bn2(self.conv2(x)))  # 输出形状: (batch_size, 32, 47, 5)
+        x = F.relu(self.bn2(self.conv2(x)))  # 输出形状: (batch_size, 64, 47, 5)
 
         # 池化层2：仅在高度维度上进行池化
         x = F.max_pool2d(
             x, kernel_size=(2, 1), stride=(2, 1)
-        )  # 输出形状: (batch_size, 32, 23, 5)
+        )  # 输出形状: (batch_size, 64, 23, 5)
+
+        # 卷积层3 -> 批归一化 -> ReLU
+        x = F.relu(self.bn3(self.conv3(x)))  # 输出形状: (batch_size, 128, 21, 3)
+
+        # 池化层3：仅在高度维度上进行池化
+        x = F.max_pool2d(
+            x, kernel_size=(2, 1), stride=(2, 1)
+        )  # 输出形状: (batch_size, 128, 10, 3)
 
         # 展平
-        x = x.view(x.size(0), -1)  # 输出形状: (batch_size, 32*23*5=3680)
+        x = x.view(x.size(0), -1)  # 输出形状: (batch_size, 128*10*3)
 
         # 全连接层1 -> ReLU
-        x = F.relu(self.fc1(x))  # 输出形状: (batch_size, 128)
+        x = F.relu(self.fc1(x))  # 输出形状: (batch_size, 256)
 
         # 丢弃
         x = self.dropout(x)
@@ -256,7 +273,7 @@ class SimpleCNN(nn.Module):
 
 # 4. 定义损失函数和优化器
 def define_model(y_train, device):
-    model = SimpleCNN()
+    model = CNN()
     # 计算类权重
     classes = np.unique(y_train)
     class_weights = compute_class_weight(
@@ -301,17 +318,26 @@ def train_model(
     返回:
         list: 每个 epoch 的训练损失。
     """
-    scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.1, patience=patience, verbose=False
-    )
+    scheduler = CosineAnnealingLR(optimizer, T_max=50)
     model.to(device)
-    train_losses = []
+    history = {
+        "train_loss": [],
+        "val_loss": [],
+        "train_accuracy": [],
+        "val_accuracy": [],
+    }
     best_accuracy = 0.0
     epochs_no_improve = 0
+
+    # Initialize TensorBoard writer
+    # in terminal: tensorboard --logdir=tensorboard
+    writer = SummaryWriter(log_dir="tensorboard")
 
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
+        correct = 0
+        total = 0
         for i, (inputs, labels) in enumerate(train_loader):
             inputs, labels = inputs.to(device), labels.to(device)
 
@@ -327,30 +353,60 @@ def train_model(
             # 反向传播
             loss.backward()
 
+            # Gradient Clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             # 更新参数
             optimizer.step()
 
             running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
 
-        epoch_loss = running_loss / len(train_loader)
-        train_losses.append(epoch_loss)
+        train_loss = running_loss / len(train_loader)
+        train_accuracy = 100 * correct / total
+        history["train_loss"].append(train_loss)
+        history["train_accuracy"].append(train_accuracy)
 
-        # 评估验证集
-        val_accuracy = evaluate_model(model, val_loader, device)
-        print(
-            f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%"
-        )
+        # 验证阶段
+        model.eval()
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
+
+        val_loss /= len(val_loader)
+        val_accuracy = 100 * val_correct / val_total
+        history["val_loss"].append(val_loss)
+        history["val_accuracy"].append(val_accuracy)
 
         # 调整学习率
-        scheduler.step(val_accuracy)
+        scheduler.step()
 
-        # 评估测试集
-        test_accuracy = evaluate_model(model, test_loader, device)
-        print(f"Test Accuracy: {test_accuracy:.2f}%")
+        print(
+            f"Epoch {epoch+1}/{epochs}, "
+            f"Train Loss: {train_loss:.4f}, Train Acc: {train_accuracy:.2f}%, "
+            f"Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}%"
+        )
+
+        # Log metrics to TensorBoard
+        writer.add_scalar("Loss/Train", train_loss, epoch)
+        writer.add_scalar("Loss/Validation", val_loss, epoch)
+        writer.add_scalar("Accuracy/Train", train_accuracy, epoch)
+        writer.add_scalar("Accuracy/Validation", val_accuracy, epoch)
 
         # 保存最佳模型
-        if test_accuracy > best_accuracy:
-            best_accuracy = test_accuracy
+        if val_accuracy > best_accuracy:
+            best_accuracy = val_accuracy
             torch.save(model.state_dict(), save_path)
             print(f"保存模型 (Accuracy: {best_accuracy:.2f}%) 到 {save_path}")
             epochs_no_improve = 0
@@ -364,7 +420,7 @@ def train_model(
             break
 
     print("训练完成")
-    return train_losses
+    return history
 
 
 # 6. 评估模型
@@ -399,19 +455,104 @@ def evaluate_model(model, test_loader, device):
     return accuracy
 
 
-# 7. 生成混淆矩阵和分类报告
-def confusion_matrix_report(model, data_loader, device):
+def evaluate_model_with_probs(model, data_loader, device):
     """
-    生成混淆矩阵和分类报告。
+    评估模型并返回真实标签和预测的概率分数。
+
+    参数：
+        model (nn.Module): 已训练的模型。
+        data_loader (DataLoader): 数据加载器。
+        device: 训练设备（CPU 或 GPU）。
+
+    返回:
+        tuple: 真实标签列表和预测概率列表。
+    """
+    model.to(device)
+    model.eval()
+    all_labels = []
+    all_probs = []
+
+    with torch.no_grad():
+        for inputs, labels in data_loader:
+            inputs = inputs.to(device)
+            outputs = model(inputs)
+            probabilities = F.softmax(outputs, dim=1)
+            all_probs.extend(probabilities.cpu().numpy())
+            all_labels.extend(labels.numpy())
+
+    return all_labels, all_probs
+
+
+def plot_roc_curves(y_true, y_probs, num_classes=3, save_dir="plots"):
+    """
+    绘制每个类别的ROC曲线并保存。
+
+    参数：
+        y_true (list or array): 真实的标签。
+        y_probs (list or array): 预测的概率分数。
+        num_classes (int): 类别数量。
+        save_dir (str): 保存图像的目录路径。
+
+    返回:
+        None
+    """
+
+    os.makedirs(save_dir, exist_ok=True)
+    y_true_bin = label_binarize(y_true, classes=list(range(num_classes)))
+    y_probs = np.array(y_probs)
+
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+
+    for i in range(num_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_probs[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+
+    # Compute micro-average ROC curve and ROC area
+    fpr["micro"], tpr["micro"], _ = roc_curve(y_true_bin.ravel(), y_probs.ravel())
+    roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+
+    # Plot ROC curves
+    plt.figure(figsize=(10, 8))
+    colors = ["aqua", "darkorange", "cornflowerblue"]
+    for i, color in zip(range(num_classes), colors):
+        plt.plot(
+            fpr[i],
+            tpr[i],
+            color=color,
+            lw=2,
+            label=f"ROC curve of class {i} (area = {roc_auc[i]:0.2f})",
+        )
+
+    plt.plot([0, 1], [0, 1], "k--", lw=2)
+    plt.xlim([-0.05, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("Receiver Operating Characteristic (ROC) Curves")
+    plt.legend(loc="lower right")
+    plt.grid(True)
+    plt.savefig(os.path.join(save_dir, "roc_curves.png"))
+    plt.close()
+    print(f"ROC curves saved to {save_dir}/roc_curves.png")
+
+
+# 7. 生成混淆矩阵和分类报告
+def confusion_matrix_report(model, data_loader, device, save_dir="plots"):
+    """
+    生成混淆矩阵和分类报告，并将混淆矩阵绘制为热图保存。
 
     参数：
         model (nn.Module): 已训练的模型。
         data_loader (DataLoader): 测试数据加载器。
         device: 训练设备（CPU 或 GPU）。
+        save_dir (str): 保存图像的目录路径。
 
     返回:
         None
     """
+    os.makedirs(save_dir, exist_ok=True)
     model.to(device)
     model.eval()
     all_preds = []
@@ -430,27 +571,68 @@ def confusion_matrix_report(model, data_loader, device):
     print("Confusion Matrix:\n", cm)
     print("\nClassification Report:\n", cr)
 
+    # 绘制混淆矩阵热图
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=["-1", "0", "1"],
+        yticklabels=["-1", "0", "1"],
+    )
+    plt.ylabel("Actual")
+    plt.xlabel("Predicted")
+    plt.title("Confusion Matrix")
+    plt.savefig(os.path.join(save_dir, "confusion_matrix.png"))
+    plt.close()
+    print(f"Confusion matrix heatmap saved to {save_dir}/confusion_matrix.png")
+
+    # save the classification report to a text file
+    with open(os.path.join(save_dir, "classification_report.txt"), "w") as f:
+        f.write(cr)
+    print(f"Classification report saved to {save_dir}/classification_report.txt")
+
 
 # 8. 绘制学习曲线
-def plot_learning_curves(train_losses):
+def plot_learning_curves(history, save_dir="plots"):
     """
-    绘制训练损失的学习曲线。
+    绘制训练和验证的损失与准确率曲线，并保存为图像文件。
 
     参数：
-        train_losses (list): 每个 epoch 的训练损失。
+        history (dict): 包含训练和验证损失与准确率的字典。
+        save_dir (str): 保存图像的目录路径。
 
     返回:
         None
     """
-    epochs = range(1, len(train_losses) + 1)
+    os.makedirs(save_dir, exist_ok=True)
+
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    # 绘制损失曲线
     plt.figure(figsize=(10, 5))
-    plt.plot(epochs, train_losses, "bo-", label="Training loss")
-    plt.title("Training Loss over Epochs")
+    plt.plot(epochs, history["train_loss"], "bo-", label="train loss")
+    plt.plot(epochs, history["val_loss"], "ro-", label="val loss")
+    plt.title("train and val loss")
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
-    plt.show()
+    plt.savefig(os.path.join(save_dir, "loss_curve.png"))
+    plt.close()
+
+    # 绘制准确率曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(epochs, history["train_accuracy"], "bo-", label="train_accuracy")
+    plt.plot(epochs, history["val_accuracy"], "ro-", label="val_accuracy")
+    plt.title("train and val accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy (%)")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(save_dir, "accuracy_curve.png"))
+    plt.close()
 
 
 # 9. 加载并使用保存的模型
@@ -465,7 +647,7 @@ def load_model(model_path, device):
     返回:
         nn.Module: 加载好的模型。
     """
-    model = SimpleCNN()
+    model = CNN()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
@@ -554,7 +736,7 @@ def main():
     test_dataset = CustomMatrixDataset(X_test, y_test)
 
     # 创建数据加载器
-    batch_size = 32
+    batch_size = 64
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -566,9 +748,9 @@ def main():
     model, criterion, optimizer = define_model(y_train, device)
 
     # 训练模型
-    epochs = 50
-    save_path = "simple_cnn_model_2.pth"
-    train_losses = train_model(
+    epochs = 100
+    save_path = "simple_cnn_model_3.pth"
+    history = train_model(
         model,
         train_loader,
         val_loader,
@@ -578,19 +760,23 @@ def main():
         device,
         epochs=epochs,
         save_path=save_path,
-        patience=20,
+        patience=10,
     )
 
     # 绘制学习曲线
-    plot_learning_curves(train_losses)
+    plot_learning_curves(history)
 
     # 加载模型进行最终评估
     model.load_state_dict(torch.load(save_path, map_location=device))
     accuracy = evaluate_model(model, test_loader, device)
-    print(f"模型在测试集上的准确率: {accuracy:.2f}%")
+    print(f"Final Test Accuracy: {accuracy:.2f}%")
 
     # 生成混淆矩阵和分类报告
     confusion_matrix_report(model, test_loader, device)
+
+    # Generate ROC curves
+    y_true, y_probs = evaluate_model_with_probs(model, test_loader, device)
+    plot_roc_curves(y_true, y_probs, num_classes=3)
 
 
 if __name__ == "__main__":
