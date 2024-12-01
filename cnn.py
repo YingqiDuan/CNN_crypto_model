@@ -124,12 +124,13 @@ def map_labels(labels):
     return mapped_labels
 
 
-def standardize_samples(samples):
+def standardize_samples(samples, scaler_path="scaler.pkl"):
     """
     对 samples 进行标准化处理。
 
     参数：
         samples (numpy.ndarray): 原始 samples，形状为 (样本数量, 100, 9)。
+        scaler_path (str): Path to save the fitted scaler.
 
     返回:
         numpy.ndarray: 标准化后的 samples，形状不变。
@@ -139,6 +140,10 @@ def standardize_samples(samples):
 
     scaler = StandardScaler()
     samples_scaled = scaler.fit_transform(samples_reshaped)
+
+    # Save the fitted scaler
+    with open(scaler_path, "wb") as f:
+        pickle.dump(scaler, f)
 
     # 恢复原始形状
     samples_scaled = samples_scaled.reshape(num_samples, rows, cols)
@@ -655,34 +660,6 @@ def load_model(model_path, device):
     return model
 
 
-def predict(model, sample, device):
-    """
-    使用模型对单个样本进行预测。
-
-    参数：
-        model (nn.Module): 已加载的模型。
-        sample (numpy.ndarray): 单个样本数据，形状为 (100, 9)。
-        device: 训练设备（CPU 或 GPU）。
-
-    返回:
-        int: 预测的标签类别（-1, 0, 1）。
-    """
-    model.eval()
-    # 转换为张量并添加 batch 和 channel 维度
-    sample_tensor = torch.tensor(sample, dtype=torch.float32).unsqueeze(0).to(device)
-    with torch.no_grad():
-
-        # 前向传播
-        output = model(sample_tensor)
-        _, predicted_label = torch.max(output, 1)
-        predicted_label = predicted_label.cpu().numpy()[0]
-
-        # 标签映射回原始标签
-        label_mapping_reverse = {0: -1, 1: 0, 2: 1}
-
-        return label_mapping_reverse[predicted_label.item()]
-
-
 # 10. 主函数
 def main():
     # 多个 .pkl 文件所在的目录路径
@@ -715,7 +692,7 @@ def main():
     labels = map_labels(labels)
 
     # 标准化样本
-    samples = standardize_samples(samples)
+    samples = standardize_samples(samples, scaler_path="scaler.pkl")
 
     print(f"Number of NaNs in standardized samples: {np.isnan(samples).sum()}")
     print(f"Number of Infs in standardized samples: {np.isinf(samples).sum()}")
