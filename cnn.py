@@ -338,6 +338,8 @@ def train_model(
     # in terminal: tensorboard --logdir=tensorboard
     writer = SummaryWriter(log_dir="tensorboard")
 
+    os.makedirs("model")
+
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -409,11 +411,17 @@ def train_model(
         writer.add_scalar("Accuracy/Train", train_accuracy, epoch)
         writer.add_scalar("Accuracy/Validation", val_accuracy, epoch)
 
-        # 保存最佳模型
+        # 保存模型
+        epoch_path = os.path.join("model", f"epoch_{epoch+1}")
+        os.makedirs(epoch_path)
+        save_epoch_path = os.path.join(epoch_path, save_path)
+        torch.save(model.state_dict(), save_epoch_path)
+        print(f"保存模型 (Accuracy: {val_accuracy:.2f}%)")
+
         if val_accuracy > best_accuracy:
             best_accuracy = val_accuracy
             torch.save(model.state_dict(), save_path)
-            print(f"保存模型 (Accuracy: {best_accuracy:.2f}%) 到 {save_path}")
+            print(f"保存最优 Accuracy 模型: {best_accuracy:.2f}%)")
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
@@ -722,7 +730,7 @@ def main():
 
     # 训练模型
     epochs = 100
-    save_path = "cnn_model.pth"
+    save_path = "cnn_model_4h.pth"
     history = train_model(
         model,
         train_loader,

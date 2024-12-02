@@ -4,4 +4,6 @@ downloads/
 *.pth
 runs/
 models/
+model/
 *.csv
+*.pkl
