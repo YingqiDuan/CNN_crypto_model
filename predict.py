@@ -63,6 +63,7 @@ def get_data(client, coin, interval, candlesticks):
         )
         time.sleep(0.1)
         df = pd.DataFrame(klines)
+        # df = df.head(100)
         return df
     except Exception as e:
         print(f"Error fetching data for {coin}: {e}")
@@ -262,8 +263,6 @@ def main():
             print(f"No data fetched for {coin}. Skipping...")
             continue
 
-        # df = df.head(100)
-
         # 检查数据行数是否至少为days
         if len(df) < candlesticks:
             print(f"Not enough data for {coin} (found {len(df)} rows). Skipping...")
@@ -289,7 +288,7 @@ def main():
         original_label = label_mapping.get(predicted_label, "Unknown")
         df_predictions.at[coin, prediction_time] = original_label
 
-        if np.any(probabilities >= 0.9):
+        if np.any(probabilities >= 0.8):
             print(f"{coin} predicted: {original_label}, probability: {probabilities}")
 
     df_predictions.to_csv(csv_file, index=True, index_label=None)
