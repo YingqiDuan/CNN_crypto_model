@@ -63,7 +63,6 @@ def get_data(client, coin, interval, candlesticks):
         )
         time.sleep(0.1)
         df = pd.DataFrame(klines)
-        # df = df.head(100)
         return df
     except Exception as e:
         print(f"Error fetching data for {coin}: {e}")
