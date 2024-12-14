@@ -11,40 +11,7 @@ from binance.um_futures import UMFutures
 from get_trading_pairs import coins
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-
-# the CNN model architecture
-class CNN(nn.Module):
-    def __init__(self):
-        super(CNN, self).__init__()
-        # Convolutional layers
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3)
-        self.bn3 = nn.BatchNorm2d(128)
-        # Dropout layer
-        self.dropout = nn.Dropout(p=0.5)
-        # Fully connected layers
-        self.fc1 = nn.Linear(128 * 10 * 3, 256)
-        self.fc2 = nn.Linear(256, 3)  # Assuming 3 classes
-
-    def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))  # Conv1
-        x = F.max_pool2d(x, kernel_size=(2, 1), stride=(2, 1))  # Pool1
-
-        x = F.relu(self.bn2(self.conv2(x)))  # Conv2
-        x = F.max_pool2d(x, kernel_size=(2, 1), stride=(2, 1))  # Pool2
-
-        x = F.relu(self.bn3(self.conv3(x)))  # Conv3
-        x = F.max_pool2d(x, kernel_size=(2, 1), stride=(2, 1))  # Pool3
-
-        x = x.view(x.size(0), -1)  # Flatten
-        x = F.relu(self.fc1(x))  # FC1
-        x = self.dropout(x)  # Dropout
-        x = self.fc2(x)  # FC2
-        return x
+from cnn import CNN_1h
 
 
 def get_data(client, coin, interval, candlesticks):
@@ -131,7 +98,7 @@ def load_model(model_path, device):
     Returns:
         nn.Module: Loaded CNN model.
     """
-    model = CNN()
+    model = CNN_1h()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
@@ -209,7 +176,7 @@ def predict(model, sample_tensor, device):
 
 def main():
     # Paths (update these paths as necessary)
-    model_path = "cnn_model_4h.pth"  # Path to your trained model
+    model_path = "cnn_model_1h.pth"  # Path to your trained model
     scaler_path = "scaler.pkl"  # Path to your saved scaler
 
     # Check if files exist
@@ -220,7 +187,7 @@ def main():
         print(f"Scaler file not found at {scaler_path}")
         return
 
-    interval = "4h"
+    interval = "1h"
     candlesticks = 100  # 需要获取的个数
 
     # 初始化 UMFutures 客户端

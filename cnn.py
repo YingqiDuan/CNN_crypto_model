@@ -14,7 +14,6 @@ from sklearn.metrics import roc_auc_score
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -51,7 +50,7 @@ def load_multiple_pkls(file_paths):
             samples = data["samples"]
             labels = data["labels"]
 
-            samples = np.array(samples)
+            samples = np.array(samples, dtype=np.float32)
             labels = np.array(labels)
 
             if samples.ndim != 3 or samples.shape[1] != 100 or samples.shape[2] != 9:
@@ -218,9 +217,34 @@ def split_train_val_test(samples, labels, val_size=0.1, test_size=0.1, random_st
 
 
 # 3. 定义卷积神经网络模型
-class CNN(nn.Module):
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, stride=stride, padding=1
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels),
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
+class CNN_4h(nn.Module):
     def __init__(self):
-        super(CNN, self).__init__()
+        super(CNN_4h, self).__init__()
         # 卷积层1：输入通道=1，输出通道=32，卷积核大小=3
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3)
         self.bn1 = nn.BatchNorm2d(32)  # 批归一化
@@ -276,9 +300,48 @@ class CNN(nn.Module):
         return x
 
 
+class CNN_1h(nn.Module):
+    def __init__(self):
+        super(CNN_1h, self).__init__()
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
+
+        self.layer1 = ResidualBlock(64, 128, stride=2)
+        self.layer2 = ResidualBlock(128, 256, stride=2)
+        self.layer3 = ResidualBlock(256, 512, stride=2)
+
+        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+
+        self.fc1 = nn.Linear(512, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 3)
+
+        self.dropout1 = nn.Dropout(p=0.5)
+        self.dropout2 = nn.Dropout(p=0.5)
+        self.elu = nn.ELU()
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))  # (batch_size, 64, H, W)
+
+        x = self.layer1(x)  # (batch_size, 128, H/2, W/2)
+        x = self.layer2(x)  # (batch_size, 256, H/4, W/4)
+        x = self.layer3(x)  # (batch_size, 512, H/8, W/8)
+
+        x = self.global_avg_pool(x)  # (batch_size, 512, 1, 1)
+        x = x.view(x.size(0), -1)  # (batch_size, 512)
+
+        x = self.elu(self.fc1(x))
+        x = self.dropout1(x)
+        x = self.elu(self.fc2(x))
+        x = self.dropout2(x)
+        x = self.fc3(x)
+
+        return x
+
+
 # 4. 定义损失函数和优化器
 def define_model(y_train, device):
-    model = CNN()
+    model = CNN_1h()
     # 计算类权重
     classes = np.unique(y_train)
     class_weights = compute_class_weight(
@@ -288,7 +351,7 @@ def define_model(y_train, device):
     # 定义损失函数，使用类权重
     criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
     # 定义优化器，添加权重衰减
-    optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=0.00001, weight_decay=1e-5)
     return model, criterion, optimizer
 
 
@@ -297,7 +360,6 @@ def train_model(
     model,
     train_loader,
     val_loader,
-    test_loader,
     criterion,
     optimizer,
     device,
@@ -323,7 +385,7 @@ def train_model(
     返回:
         list: 每个 epoch 的训练损失。
     """
-    scheduler = CosineAnnealingLR(optimizer, T_max=50)
+    scheduler = CosineAnnealingLR(optimizer, T_max=100)
     model.to(device)
     history = {
         "train_loss": [],
@@ -660,12 +722,91 @@ def load_model(model_path, device):
     返回:
         nn.Module: 加载好的模型。
     """
-    model = CNN()
+    model = CNN_1h()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
     print(f"模型已从 {model_path} 加载")
     return model
+
+
+def evaluate_all_epochs(
+    model_class,
+    data_loader,
+    device,
+    model_dir="model",
+    num_classes=3,
+    interval="default",
+):
+    """
+    遍历模型目录下的所有 epoch 模型，加载每个模型并对测试集进行评估。
+
+    参数：
+        model_class (nn.Module): 模型类，用于实例化模型。
+        data_loader (DataLoader): 测试数据加载器。
+        device: 训练设备（CPU 或 GPU）。
+        model_dir (str): 存储模型的根目录。
+        num_classes (int): 类别数量。
+        interval (str): 模型的区间标识，用于匹配模型文件名。
+
+    返回:
+        None
+    """
+    import re
+
+    # 确保 plots 目录存在
+    base_save_dir = "plots/epochs_evaluation"
+    os.makedirs(base_save_dir, exist_ok=True)
+
+    # 获取所有 epoch 模型路径
+    pattern = re.compile(rf"epoch_(\d+)/cnn_model_{re.escape(interval)}\.pth$")
+    epoch_models = []
+
+    for root, dirs, files in os.walk(model_dir):
+        for file in files:
+            match = pattern.match(os.path.join(os.path.basename(root), file))
+            if match:
+                epoch_num = int(match.group(1))
+                full_path = os.path.join(root, file)
+                epoch_models.append((epoch_num, full_path))
+
+    # 按 epoch 顺序排序
+    epoch_models.sort(key=lambda x: x[0])
+
+    if not epoch_models:
+        print(f"在目录 {model_dir} 中未找到匹配的模型文件。")
+        return
+
+    for epoch_num, model_path in epoch_models:
+        print(f"评估 Epoch {epoch_num} 的模型: {model_path}")
+
+        # 实例化模型并加载权重
+        model = model_class()
+        model.load_state_dict(
+            torch.load(model_path, map_location=device, weights_only=True)
+        )
+        model.to(device)
+        model.eval()
+
+        # 评估模型
+        accuracy = evaluate_model(model, data_loader, device)
+        print(f"Epoch {epoch_num} Test Accuracy: {accuracy:.2f}%")
+
+        # 生成混淆矩阵和分类报告
+        epoch_save_dir = os.path.join(base_save_dir, f"epoch_{epoch_num}")
+        confusion_matrix_report(model, data_loader, device, save_dir=epoch_save_dir)
+
+        # 生成 ROC 曲线
+        y_true, y_probs = evaluate_model_with_probs(model, data_loader, device)
+        plot_roc_curves(
+            y_true, y_probs, num_classes=num_classes, save_dir=epoch_save_dir
+        )
+
+        # 保存测试准确率到文本文件
+        with open(os.path.join(epoch_save_dir, "test_accuracy.txt"), "w") as f:
+            f.write(f"Epoch {epoch_num} Test Accuracy: {accuracy:.2f}%\n")
+
+    print("所有 epoch 的评估完成。")
 
 
 # 10. 主函数
@@ -674,7 +815,9 @@ def main():
     data_directory = "merged_csv"  # 替换为包含多个 .pkl 文件的目录路径
 
     # 获取所有 .pkl 文件路径
-    file_paths = get_pkl_file_paths(data_directory)
+    interval = input("interval=")
+    pattern = f"*{interval}*.pkl"
+    file_paths = get_pkl_file_paths(data_directory, pattern=pattern)
     if not file_paths:
         print(f"在目录 {data_directory} 中未找到任何 .pkl 文件。")
         return
@@ -730,12 +873,11 @@ def main():
 
     # 训练模型
     epochs = 100
-    save_path = "cnn_model_4h.pth"
+    save_path = f"cnn_model_{interval}.pth"
     history = train_model(
         model,
         train_loader,
         val_loader,
-        test_loader,
         criterion,
         optimizer,
         device,
@@ -748,16 +890,26 @@ def main():
     plot_learning_curves(history)
 
     # 加载模型进行最终评估
-    model.load_state_dict(torch.load(save_path, map_location=device))
+    model.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
     accuracy = evaluate_model(model, test_loader, device)
     print(f"Final Test Accuracy: {accuracy:.2f}%")
 
     # 生成混淆矩阵和分类报告
     confusion_matrix_report(model, test_loader, device)
 
-    # Generate ROC curves
+    # 生成并保存 ROC 曲线
     y_true, y_probs = evaluate_model_with_probs(model, test_loader, device)
     plot_roc_curves(y_true, y_probs, num_classes=3)
+
+    # 对每个epoch都用测试集评估
+    evaluate_all_epochs(
+        model_class=CNN_1h,
+        data_loader=test_loader,
+        device=device,
+        model_dir="model",
+        num_classes=3,
+        interval=interval,
+    )
 
 
 if __name__ == "__main__":
