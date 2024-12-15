@@ -254,7 +254,9 @@ def main():
         original_label = label_mapping.get(predicted_label, "Unknown")
         df_predictions.at[coin, prediction_time] = original_label
 
-        if np.any(probabilities >= 0.8):
+        if np.any(probabilities >= 0.8) and (
+            original_label == -1 or original_label == 1
+        ):
             print(f"{coin} predicted: {original_label}, probability: {probabilities}")
 
     df_predictions.to_csv(csv_file, index=True, index_label=None)
