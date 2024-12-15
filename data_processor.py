@@ -386,7 +386,7 @@ class DataProcessor:
         self.clean_extracted_files()
         return merged_files
 
-    def split_data(self, csv_path: Path, save_path: Path):
+    def split_data(self, csv_path: Path, save_path: Path, diff=0.01):
         """
         将 CSV 文件拆分为多个 100 行的样本，并为每个样本生成对应的标签。
         同时，对每个样本的指定列进行归一化处理。
@@ -464,9 +464,9 @@ class DataProcessor:
                 # 根据条件设置 label
                 current_close = df.loc[idx, "close"]
                 current_open = df.loc[idx, "open"]
-                if current_close > current_open * 1.01:
+                if current_close > current_open * (1 + diff):
                     label = 1
-                elif current_close < current_open * 0.99:
+                elif current_close < current_open * (1 - diff):
                     label = -1
                 else:
                     label = 0
@@ -493,12 +493,13 @@ if __name__ == "__main__":
     days, trading_pairs, periods = dp.get_user_input()
     dp.download_data(days, trading_pairs, periods)
     merged_files = dp.merge_data(trading_pairs, periods)
+    diff = 0.01
     for csv_path in merged_files:
         csv_path = Path(csv_path)
         # 获取原文件名的 stem（不包含后缀）
         stem = csv_path.stem
         # 创建新的文件名，添加 '_samples_with_labels.pkl'
-        new_filename = stem + "_samples_with_labels.pkl"
+        new_filename = stem + f"_samples_with_labels_{diff}.pkl"
         # 使用 with_name 方法替换文件名
         save_path = csv_path.with_name(new_filename)
-        dp.split_data(csv_path, save_path)
+        dp.split_data(csv_path, save_path, diff=diff)

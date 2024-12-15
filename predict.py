@@ -11,7 +11,7 @@ from binance.um_futures import UMFutures
 from get_trading_pairs import coins
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from cnn import CNN_1h
+from cnn import CNN_4h
 
 
 def get_data(client, coin, interval, candlesticks):
@@ -98,7 +98,7 @@ def load_model(model_path, device):
     Returns:
         nn.Module: Loaded CNN model.
     """
-    model = CNN_1h()
+    model = CNN_4h()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
@@ -176,7 +176,7 @@ def predict(model, sample_tensor, device):
 
 def main():
     # Paths (update these paths as necessary)
-    model_path = "cnn_model_1h.pth"  # Path to your trained model
+    model_path = "cnn_model_4h.pth"  # Path to your trained model
     scaler_path = "scaler.pkl"  # Path to your saved scaler
 
     # Check if files exist

@@ -341,7 +341,7 @@ class CNN_1h(nn.Module):
 
 # 4. 定义损失函数和优化器
 def define_model(y_train, device):
-    model = CNN_1h()
+    model = CNN_4h()
     # 计算类权重
     classes = np.unique(y_train)
     class_weights = compute_class_weight(
@@ -722,7 +722,7 @@ def load_model(model_path, device):
     返回:
         nn.Module: 加载好的模型。
     """
-    model = CNN_1h()
+    model = CNN_4h()
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
@@ -759,7 +759,7 @@ def evaluate_all_epochs(
     os.makedirs(base_save_dir, exist_ok=True)
 
     # 获取所有 epoch 模型路径
-    pattern = re.compile(rf"epoch_(\d+)/cnn_model_{re.escape(interval)}\.pth$")
+    pattern = re.compile(rf"model/epoch_(\d+)/cnn_model_{re.escape(interval)}\.pth$")
     epoch_models = []
 
     for root, dirs, files in os.walk(model_dir):
@@ -883,7 +883,7 @@ def main():
         device,
         epochs=epochs,
         save_path=save_path,
-        patience=10,
+        patience=5,
     )
 
     # 绘制学习曲线
@@ -903,7 +903,7 @@ def main():
 
     # 对每个epoch都用测试集评估
     evaluate_all_epochs(
-        model_class=CNN_1h,
+        model_class=CNN_4h,
         data_loader=test_loader,
         device=device,
         model_dir="model",
