@@ -736,7 +736,7 @@ def evaluate_all_epochs(
     device,
     model_dir="model",
     num_classes=3,
-    interval="default",
+    interval="4h",
 ):
     """
     遍历模型目录下的所有 epoch 模型，加载每个模型并对测试集进行评估。
@@ -752,34 +752,30 @@ def evaluate_all_epochs(
     返回:
         None
     """
-    import re
+    import glob
+    from pathlib import Path
 
     # 确保 plots 目录存在
     base_save_dir = "plots/epochs_evaluation"
     os.makedirs(base_save_dir, exist_ok=True)
 
     # 获取所有 epoch 模型路径
-    pattern = re.compile(rf"model/epoch_(\d+)/cnn_model_{re.escape(interval)}\.pth$")
-    epoch_models = []
+    model_path = Path(model_dir)
+    epoch_models = list(model_path.glob("epoch_*/**/*{}*.pth".format(interval)))
 
-    for root, dirs, files in os.walk(model_dir):
-        for file in files:
-            match = pattern.match(os.path.join(os.path.basename(root), file))
-            if match:
-                epoch_num = int(match.group(1))
-                full_path = os.path.join(root, file)
-                epoch_models.append((epoch_num, full_path))
+    def extract_epoch_num(file_path):
+        epoch_folder = file_path.parent.name  # 'epoch_10'
+        epoch_num = int(epoch_folder.split("_")[1])  # 10
+        return epoch_num
 
     # 按 epoch 顺序排序
-    epoch_models.sort(key=lambda x: x[0])
+    epoch_models.sort(key=extract_epoch_num)
 
     if not epoch_models:
         print(f"在目录 {model_dir} 中未找到匹配的模型文件。")
         return
 
-    for epoch_num, model_path in epoch_models:
-        print(f"评估 Epoch {epoch_num} 的模型: {model_path}")
-
+    for epoch_num, model_path in enumerate(epoch_models):
         # 实例化模型并加载权重
         model = model_class()
         model.load_state_dict(
@@ -790,10 +786,9 @@ def evaluate_all_epochs(
 
         # 评估模型
         accuracy = evaluate_model(model, data_loader, device)
-        print(f"Epoch {epoch_num} Test Accuracy: {accuracy:.2f}%")
 
         # 生成混淆矩阵和分类报告
-        epoch_save_dir = os.path.join(base_save_dir, f"epoch_{epoch_num}")
+        epoch_save_dir = os.path.join(base_save_dir, f"epoch_{epoch_num+1}")
         confusion_matrix_report(model, data_loader, device, save_dir=epoch_save_dir)
 
         # 生成 ROC 曲线
@@ -804,7 +799,7 @@ def evaluate_all_epochs(
 
         # 保存测试准确率到文本文件
         with open(os.path.join(epoch_save_dir, "test_accuracy.txt"), "w") as f:
-            f.write(f"Epoch {epoch_num} Test Accuracy: {accuracy:.2f}%\n")
+            f.write(f"Epoch {epoch_num+1} Test Accuracy: {accuracy:.2f}%\n")
 
     print("所有 epoch 的评估完成。")
 

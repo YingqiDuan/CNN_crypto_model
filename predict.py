@@ -187,7 +187,7 @@ def main():
         print(f"Scaler file not found at {scaler_path}")
         return
 
-    interval = "1h"
+    interval = "4h"
     candlesticks = 100  # 需要获取的个数
 
     # 初始化 UMFutures 客户端
@@ -254,7 +254,7 @@ def main():
         original_label = label_mapping.get(predicted_label, "Unknown")
         df_predictions.at[coin, prediction_time] = original_label
 
-        if np.any(probabilities >= 0.8) and (
+        if np.any(probabilities >= 0.6) and (
             original_label == -1 or original_label == 1
         ):
             print(f"{coin} predicted: {original_label}, probability: {probabilities}")
