@@ -9,3 +9,4 @@ model/
 *.pkl
 *.ipynb
 tensorboard/
+run/

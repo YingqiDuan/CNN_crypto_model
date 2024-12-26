@@ -4,9 +4,7 @@ import time
 import pandas as pd
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.preprocessing import StandardScaler
 from binance.um_futures import UMFutures
 from get_trading_pairs import coins
 from datetime import datetime
@@ -99,7 +97,9 @@ def load_model(model_path, device):
         nn.Module: Loaded CNN model.
     """
     model = CNN_4h()
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(
+        torch.load(model_path, map_location=device, weights_only=True)
+    )
     model.to(device)
     model.eval()
     print(f"Model loaded from {model_path}")
@@ -176,9 +176,8 @@ def predict(model, sample_tensor, device):
 
 def main():
     # Paths (update these paths as necessary)
-    model_path = "cnn_model_4h.pth"  # Path to your trained model
-    scaler_path = "scaler.pkl"  # Path to your saved scaler
-
+    model_path = "run/cnn_model_4h.pth"
+    scaler_path = "run/scaler.pkl"
     # Check if files exist
     if not os.path.exists(model_path):
         print(f"Model file not found at {model_path}")

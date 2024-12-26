@@ -264,7 +264,7 @@ class CNN_4h(nn.Module):
         # 卷积层1 -> 批归一化 -> ReLU
         x = F.relu(self.bn1(self.conv1(x)))  # 输出形状: (batch_size, 32, 98, 7)
 
-        # 池化层1：仅在高度维度上进行池化
+        # 池化层1：
         x = F.max_pool2d(
             x, kernel_size=(2, 1), stride=(2, 1)
         )  # 输出形状: (batch_size, 32, 49, 7)
@@ -272,7 +272,7 @@ class CNN_4h(nn.Module):
         # 卷积层2 -> 批归一化 -> ReLU
         x = F.relu(self.bn2(self.conv2(x)))  # 输出形状: (batch_size, 64, 47, 5)
 
-        # 池化层2：仅在高度维度上进行池化
+        # 池化层2：
         x = F.max_pool2d(
             x, kernel_size=(2, 1), stride=(2, 1)
         )  # 输出形状: (batch_size, 64, 23, 5)
@@ -280,7 +280,7 @@ class CNN_4h(nn.Module):
         # 卷积层3 -> 批归一化 -> ReLU
         x = F.relu(self.bn3(self.conv3(x)))  # 输出形状: (batch_size, 128, 21, 3)
 
-        # 池化层3：仅在高度维度上进行池化
+        # 池化层3：
         x = F.max_pool2d(
             x, kernel_size=(2, 1), stride=(2, 1)
         )  # 输出形状: (batch_size, 128, 10, 3)
@@ -297,6 +297,37 @@ class CNN_4h(nn.Module):
         # 全连接层2
         x = self.fc2(x)  # 输出形状: (batch_size, 3)
 
+        return x
+
+
+class CNN_4h_2(nn.Module):
+    def __init__(self):
+        super(CNN_4h_2, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.prelu1 = nn.PReLU(num_parameters=32)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.prelu2 = nn.PReLU(num_parameters=64)
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.prelu3 = nn.PReLU(num_parameters=128)
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc1 = nn.Linear(128 * 10 * 3, 256)
+        self.prelu_fc1 = nn.PReLU(num_parameters=256)
+        self.fc2 = nn.Linear(256, 3)
+
+    def forward(self, x):
+        x = self.prelu1(self.bn1(self.conv1(x)))
+        x = F.avg_pool2d(x, kernel_size=(2, 1), stride=(2, 1))
+        x = self.prelu2(self.bn2(self.conv2(x)))
+        x = F.avg_pool2d(x, kernel_size=(2, 1), stride=(2, 1))
+        x = self.prelu3(self.bn3(self.conv3(x)))
+        x = F.avg_pool2d(x, kernel_size=(2, 1), stride=(2, 1))
+        x = x.view(x.size(0), -1)
+        x = self.prelu_fc1(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
         return x
 
 
@@ -341,7 +372,7 @@ class CNN_1h(nn.Module):
 
 # 4. 定义损失函数和优化器
 def define_model(y_train, device):
-    model = CNN_4h()
+    model = CNN_4h_2()
     # 计算类权重
     classes = np.unique(y_train)
     class_weights = compute_class_weight(
@@ -722,8 +753,10 @@ def load_model(model_path, device):
     返回:
         nn.Module: 加载好的模型。
     """
-    model = CNN_4h()
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model = CNN_4h_2()
+    model.load_state_dict(
+        torch.load(model_path, map_location=device, weights_only=True)
+    )
     model.to(device)
     model.eval()
     print(f"模型已从 {model_path} 加载")
@@ -898,7 +931,7 @@ def main():
 
     # 对每个epoch都用测试集评估
     evaluate_all_epochs(
-        model_class=CNN_4h,
+        model_class=CNN_4h_2,
         data_loader=test_loader,
         device=device,
         model_dir="model",
