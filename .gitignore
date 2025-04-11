@@ -10,3 +10,4 @@ model/
 *.ipynb
 tensorboard/
 run/
+backtest_result_f5*/

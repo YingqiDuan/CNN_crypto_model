@@ -4,6 +4,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 import glob
+import concurrent.futures
+import time
+from tqdm import tqdm
+import multiprocessing
+import psutil
+import warnings
+
+# Ignore warnings to reduce output noise
+warnings.filterwarnings("ignore")
 
 
 # Import the indicator functions
@@ -88,7 +97,7 @@ def f5_strategy(df):
 
 
 def backtest(
-    df, initial_capital=10000.0, position_size=0.95, fee_rate=0.0004, max_hold_periods=3
+    df, initial_capital=10000.0, position_size=1, fee_rate=0.0005, max_hold_periods=2
 ):
     """
     Backtest the strategy on historical data
@@ -573,8 +582,7 @@ def plot_results(backtest_df, symbol):
 
     # 多头平仓 (1->0 或 1->-1)
     long_exits = backtest_df[
-        (backtest_df["position_change"] < 0)
-        & (backtest_df["position_change"].shift(1) == 1)
+        (backtest_df["position_change"] < 0) & (backtest_df["position"].shift(1) == 1)
     ]
     plt.scatter(
         long_exits.index,
@@ -602,8 +610,7 @@ def plot_results(backtest_df, symbol):
 
     # 空头平仓 (-1->0 或 -1->1)
     short_exits = backtest_df[
-        (backtest_df["position_change"] > 0)
-        & (backtest_df["position_change"].shift(1) == -1)
+        (backtest_df["position_change"] > 0) & (backtest_df["position"].shift(1) == -1)
     ]
     plt.scatter(
         short_exits.index,
@@ -652,16 +659,38 @@ def plot_results(backtest_df, symbol):
         alpha=0.5,
     )
 
-    # 添加仓位区域标记
-    for i in range(1, len(backtest_df)):
-        if backtest_df["position"].iloc[i] == 1:
-            plt.axvspan(
-                backtest_df.index[i - 1], backtest_df.index[i], color="green", alpha=0.1
-            )
-        elif backtest_df["position"].iloc[i] == -1:
-            plt.axvspan(
-                backtest_df.index[i - 1], backtest_df.index[i], color="red", alpha=0.1
-            )
+    # 标记持仓区间，而不是每个时间点
+    # 创建一个辅助函数来标识连续持仓区间
+    def mark_position_regions(df, position_value, color):
+        # 找出所有该仓位的开始和结束点
+        position_regions = []
+        in_position = False
+        start_idx = None
+
+        for i, pos in enumerate(df["position"]):
+            # 当进入仓位时
+            if pos == position_value and not in_position:
+                in_position = True
+                start_idx = i
+            # 当退出仓位时
+            elif pos != position_value and in_position:
+                in_position = False
+                # 添加区间
+                if start_idx is not None:
+                    position_regions.append((df.index[start_idx], df.index[i - 1]))
+
+        # 如果结束时仍在仓位中
+        if in_position and start_idx is not None:
+            position_regions.append((df.index[start_idx], df.index[-1]))
+
+        # 绘制所有区间
+        for start, end in position_regions:
+            plt.axvspan(start, end, color=color, alpha=0.15)
+
+    # 标记多头区域
+    mark_position_regions(backtest_df, 1, "green")
+    # 标记空头区域
+    mark_position_regions(backtest_df, -1, "red")
 
     plt.title(f"{symbol} Strategy Performance vs Buy & Hold")
     plt.ylabel("Return (%)")
@@ -683,14 +712,58 @@ def plot_results(backtest_df, symbol):
     plt.close()
 
 
+def process_single_file(csv_file):
+    """
+    Process a single cryptocurrency file
+    This function handles all steps for one file: reading, cleaning, strategy application,
+    backtesting, analysis, and plotting
+    """
+    try:
+        symbol = os.path.basename(csv_file).split("_")[0]
+        # Reduce print statements when using multiprocessing to avoid console clutter
+        # print(f"Processing {symbol}...")
+
+        # Read CSV file
+        df = pd.read_csv(csv_file)
+
+        # Clean data
+        df = clean_data(df)
+
+        # Skip if not enough data
+        if len(df) < 100:
+            # print(f"Skipping {symbol} - not enough data")
+            return None
+
+        # Apply f5 strategy
+        df = f5_strategy(df)
+
+        # Run backtest
+        backtest_df = backtest(df)
+
+        # Analyze results
+        result = analyze_results(backtest_df, symbol)
+
+        # Plot results
+        plot_results(backtest_df, symbol)
+
+        return result
+
+    except Exception as e:
+        print(f"Error processing {csv_file}: {e}")
+        return None
+
+
 def main():
-    # 创建结果目录
+    # Record start time
+    start_time = time.time()
+
+    # Create result directories
     results_dir = "backtest_result_f5"
     log_dir = os.path.join(results_dir, "logs")
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
-    # 清空汇总日志文件
+    # Clear summary log file
     with open(os.path.join(log_dir, "all_performances.txt"), "w") as f:
         f.write(f"回测开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("-" * 50 + "\n\n")
@@ -704,41 +777,47 @@ def main():
     # Limit to first 5 files for testing (remove this line to process all files)
     # csv_files = csv_files[:5]
 
-    # Initialize results list
-    results = []
+    # Initialize results list manager to share results between processes
+    manager = multiprocessing.Manager()
+    results = manager.list()
 
-    # Process each file
-    for csv_file in csv_files:
-        try:
-            symbol = os.path.basename(csv_file).split("_")[0]
-            print(f"\nProcessing {symbol}...")
+    # Get CPU info
+    cpu_count = psutil.cpu_count(logical=True)
+    physical_cpu = psutil.cpu_count(logical=False)
 
-            # Read CSV file
-            df = pd.read_csv(csv_file)
+    # Determine optimal number of processes
+    # Use physical cores + 1 as a good starting point (avoid hyperthreading overhead)
+    # If physical core count isn't available, use 75% of logical cores
+    if physical_cpu:
+        max_workers = min(physical_cpu + 1, cpu_count)
+    else:
+        max_workers = max(1, int(cpu_count * 0.75))
 
-            # Clean data
-            df = clean_data(df)
+    print(f"System has {cpu_count} logical cores and {physical_cpu} physical cores")
+    print(f"Using {max_workers} worker processes")
 
-            # Skip if not enough data
-            if len(df) < 100:
-                print(f"Skipping {symbol} - not enough data")
-                continue
+    # Process files in parallel using ProcessPoolExecutor
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        futures = [
+            executor.submit(process_single_file, csv_file) for csv_file in csv_files
+        ]
 
-            # Apply f5 strategy
-            df = f5_strategy(df)
+        # Process results as they complete
+        for future in tqdm(
+            concurrent.futures.as_completed(futures),
+            total=len(csv_files),
+            desc="Processing files",
+        ):
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+            except Exception as e:
+                print(f"Error in worker process: {e}")
 
-            # Run backtest
-            backtest_df = backtest(df)
-
-            # Analyze results
-            result = analyze_results(backtest_df, symbol)
-            results.append(result)
-
-            # Plot results
-            plot_results(backtest_df, symbol)
-
-        except Exception as e:
-            print(f"Error processing {csv_file}: {e}")
+    # Convert to standard list for further processing
+    results = list(results)
 
     # Create summary DataFrame
     if results:
@@ -748,7 +827,7 @@ def main():
         results_df = results_df.sort_values("outperformance", ascending=False)
 
         # Save results
-        results_df.to_csv("backtest_summary.csv", index=False)
+        results_df.to_csv(f"{results_dir}/backtest_summary.csv", index=False)
 
         # Print top performers
         print("\n----- Top 10 Performers -----")
@@ -946,6 +1025,20 @@ def main():
 
             f.write(f"\n回测结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
+            # Add execution time
+            execution_time = time.time() - start_time
+            f.write(
+                f"\n总执行时间: {execution_time:.2f} 秒 ({execution_time/60:.2f} 分钟)\n"
+            )
+
+    # Print execution time
+    execution_time = time.time() - start_time
+    print(
+        f"\nTotal execution time: {execution_time:.2f} seconds ({execution_time/60:.2f} minutes)"
+    )
+    print(f"Average time per file: {execution_time/len(csv_files):.2f} seconds")
+
 
 if __name__ == "__main__":
+    # Ensure this guard for multiprocessing
     main()
