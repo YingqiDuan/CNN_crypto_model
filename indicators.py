@@ -22,13 +22,32 @@ def bb(df, window=20, std_num=1.949):
     return upper, lower
 
 
+import pandas as pd
+import numpy as np
+
+
 def kdj(df, window=9, k_s=3, d_s=3):
     high = df["high"].rolling(window=window, min_periods=1).max()
     low = df["low"].rolling(window=window, min_periods=1).min()
     rsv = (df["close"] - low) / (high - low) * 100
-    k = rsv.ewm(alpha=1 / k_s, adjust=False).mean()
-    d = k.ewm(alpha=1 / d_s, adjust=False).mean()
-    j = 3 * k - 2 * d
+
+    k = pd.Series(index=df.index, dtype=float)
+    d = pd.Series(index=df.index, dtype=float)
+    j = pd.Series(index=df.index, dtype=float)
+
+    for i in range(len(df)):
+        if i < window - 2:
+            k.iloc[i] = np.nan
+            d.iloc[i] = np.nan
+            j.iloc[i] = np.nan
+        elif i == window - 2:
+            k.iloc[i] = 50
+            d.iloc[i] = 50
+            j.iloc[i] = 3 * 50 - 2 * 50  # j = 50
+        else:
+            k.iloc[i] = (1 / k_s) * rsv.iloc[i] + (1 - 1 / k_s) * k.iloc[i - 1]
+            d.iloc[i] = (1 / d_s) * k.iloc[i] + (1 - 1 / d_s) * d.iloc[i - 1]
+            j.iloc[i] = 3 * k.iloc[i] - 2 * d.iloc[i]
     return k, d, j
 
 
