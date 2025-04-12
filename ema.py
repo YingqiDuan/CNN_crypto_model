@@ -136,7 +136,6 @@ def f5(client, length, interval):
             and df["ema5"].iloc[-3] < df["sma5"].iloc[-3]
             and df["ema5"].iloc[-1] > df["sma5"].iloc[-1]
             and df["ema5"].iloc[-1] > df["ema5"].iloc[-2] > df["ema5"].iloc[-3]
-            and df["sma5"].iloc[-1] > df["sma5"].iloc[-2] > df["sma5"].iloc[-3]
         ):
             print(coin, "up")
             continue
@@ -146,7 +145,6 @@ def f5(client, length, interval):
             and df["ema5"].iloc[-3] > df["sma5"].iloc[-3]
             and df["ema5"].iloc[-1] < df["sma5"].iloc[-1]
             and df["ema5"].iloc[-1] < df["ema5"].iloc[-2] < df["ema5"].iloc[-3]
-            and df["sma5"].iloc[-1] < df["sma5"].iloc[-2] < df["sma5"].iloc[-3]
         ):
             print(coin, "down")
 

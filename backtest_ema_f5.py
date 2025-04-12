@@ -69,24 +69,16 @@ def f5_strategy(df):
 
     # Buy signals (1)
     buy_condition = (
-        (df["ema5"].shift(1) > df["sma5"].shift(1))
-        & (df["ema5"].shift(2) < df["sma5"].shift(2))
+        (df["ema5"].shift(1) < df["sma5"].shift(1))
         & (df["ema5"] > df["sma5"])
         & (df["ema5"] > df["ema5"].shift(1))
-        & (df["ema5"].shift(1) > df["ema5"].shift(2))
-        & (df["sma5"] > df["sma5"].shift(1))
-        & (df["sma5"].shift(1) > df["sma5"].shift(2))
     )
 
     # Sell signals (-1)
     sell_condition = (
-        (df["ema5"].shift(1) < df["sma5"].shift(1))
-        & (df["ema5"].shift(2) > df["sma5"].shift(2))
+        (df["ema5"].shift(1) > df["sma5"].shift(1))
         & (df["ema5"] < df["sma5"])
         & (df["ema5"] < df["ema5"].shift(1))
-        & (df["ema5"].shift(1) < df["ema5"].shift(2))
-        & (df["sma5"] < df["sma5"].shift(1))
-        & (df["sma5"].shift(1) < df["sma5"].shift(2))
     )
 
     # Set signals
@@ -122,7 +114,10 @@ def backtest(
     backtest_df["holdings"] = (
         0.0  # Value of current holdings (positive for long, negative for short)
     )
-    backtest_df["total_value"] = initial_capital  # Capital + holdings
+    backtest_df["unrealized_pnl"] = (
+        0.0  # Track unrealized profit/loss for short positions
+    )
+    backtest_df["total_value"] = initial_capital  # Capital + holdings + unrealized P&L
     backtest_df["hold_periods"] = 0  # Number of periods a position has been held
     backtest_df["forced_close"] = (
         0  # Indicator for forced close due to max hold periods
@@ -132,6 +127,7 @@ def backtest(
     entry_price = 0
     capital = initial_capital
     holdings = 0
+    unrealized_pnl = 0.0  # Track unrealized P&L
     hold_periods = 0  # 持仓周期计数器
 
     # Loop through the data to simulate trading
@@ -161,6 +157,7 @@ def backtest(
             entry_price = curr_price
             capital -= trade_size
             holdings = shares_bought * curr_price
+            unrealized_pnl = 0.0  # Reset unrealized P&L
             hold_periods = 0  # 重置持仓周期计数器
 
         # 情况2: 当前无仓位，遇到卖出信号，开空仓
@@ -178,6 +175,7 @@ def backtest(
             entry_price = curr_price
             capital -= fee  # 只扣除手续费
             holdings = -shares_shorted * curr_price  # 负值表示空头持仓
+            unrealized_pnl = 0.0  # Reset unrealized P&L
             hold_periods = 0  # 重置持仓周期计数器
 
         # 情况3: 当前持有多仓，遇到卖出信号或强制平仓，平多仓
@@ -204,12 +202,14 @@ def backtest(
                 entry_price = curr_price
                 capital -= fee  # 只扣除手续费
                 holdings = -shares_shorted * curr_price  # 负值表示空头持仓
+                unrealized_pnl = 0.0  # Reset unrealized P&L
                 hold_periods = 0  # 重置持仓周期计数器
             else:
                 # 强制平仓，不开新仓位
                 position = 0
                 entry_price = 0
                 holdings = 0
+                unrealized_pnl = 0.0  # Reset unrealized P&L
                 hold_periods = 0  # 重置持仓周期计数器
 
         # 情况4: 当前持有空仓，遇到买入信号或强制平仓，平空仓
@@ -236,12 +236,14 @@ def backtest(
                 entry_price = curr_price
                 capital -= trade_size
                 holdings = shares_bought * curr_price
+                unrealized_pnl = 0.0  # Reset unrealized P&L
                 hold_periods = 0  # 重置持仓周期计数器
             else:
                 # 强制平仓，不开新仓位
                 position = 0
                 entry_price = 0
                 holdings = 0
+                unrealized_pnl = 0.0  # Reset unrealized P&L
                 hold_periods = 0  # 重置持仓周期计数器
 
         # 更新持仓价值
@@ -249,9 +251,13 @@ def backtest(
             # 多头持仓价值随价格变化
             holdings = holdings * curr_price / backtest_df["close"].iloc[i - 1]
             hold_periods += 1
+            unrealized_pnl = 0.0  # 多头的未实现损益已经包含在holdings中
         elif position == -1:
             # 空头持仓价值随价格变化（反向）
+            old_holdings = holdings
             holdings = holdings * curr_price / backtest_df["close"].iloc[i - 1]
+            # 计算空头的未实现盈亏 - 价格下跌时获利，价格上涨时亏损
+            unrealized_pnl = -holdings * (1 - curr_price / entry_price)
             hold_periods += 1
 
         # Update backtest DataFrame
@@ -259,9 +265,18 @@ def backtest(
         backtest_df.loc[backtest_df.index[i], "entry_price"] = entry_price
         backtest_df.loc[backtest_df.index[i], "capital"] = capital
         backtest_df.loc[backtest_df.index[i], "holdings"] = holdings
-        backtest_df.loc[backtest_df.index[i], "total_value"] = capital + abs(
-            holdings
-        )  # 空头持仓也计入总价值
+        backtest_df.loc[backtest_df.index[i], "unrealized_pnl"] = unrealized_pnl
+
+        # Fix total_value calculation: different handling for long vs short positions
+        if position == 1:  # Long position
+            backtest_df.loc[backtest_df.index[i], "total_value"] = capital + holdings
+        elif position == -1:  # Short position
+            backtest_df.loc[backtest_df.index[i], "total_value"] = (
+                capital + unrealized_pnl
+            )
+        else:  # No position
+            backtest_df.loc[backtest_df.index[i], "total_value"] = capital
+
         backtest_df.loc[backtest_df.index[i], "hold_periods"] = hold_periods
 
     # Calculate returns and metrics
@@ -458,7 +473,7 @@ def analyze_results(backtest_df, symbol):
     # Calculate daily returns for annualized metrics
     backtest_df["daily_return"] = backtest_df["total_value"].pct_change()
 
-    # Calculate annualized return (assuming 252 trading days in a year)
+    # Calculate annualized return (assuming 365 trading days in a year)
     days = (backtest_df.index[-1] - backtest_df.index[0]).days
     years = days / 365
     annualized_return = (
@@ -478,7 +493,7 @@ def analyze_results(backtest_df, symbol):
         sharpe_ratio = (
             (backtest_df["daily_return"].mean() - risk_free_rate)
             / backtest_df["daily_return"].std()
-            * (252**0.5)
+            * (365**0.5)
         )
     else:
         sharpe_ratio = 0
@@ -516,7 +531,7 @@ def analyze_results(backtest_df, symbol):
     print(summary_text)
 
     # 确保目录存在
-    log_dir = "backtest_result_f5/logs"
+    log_dir = "backtest/backtest_result_f5/logs"
     os.makedirs(log_dir, exist_ok=True)
 
     # 保存到文本文件
@@ -562,86 +577,13 @@ def plot_results(backtest_df, symbol):
     plt.plot(backtest_df.index, backtest_df["ema5"], label="EMA(5)", color="blue")
     plt.plot(backtest_df.index, backtest_df["sma5"], label="SMA(5)", color="red")
 
-    # 标记仓位变化点
-    # 通过计算position列的差分来获取仓位的变化
+    # 计算position列的差分用于其他功能
     backtest_df["position_change"] = backtest_df["position"].diff()
 
-    # 多头开仓 (0->1)
-    long_entries = backtest_df[
-        (backtest_df["position_change"] == 1) & (backtest_df["position"] == 1)
-    ]
-    plt.scatter(
-        long_entries.index,
-        long_entries["close"],
-        color="green",
-        marker="^",
-        alpha=1,
-        label="Long Entry",
-        s=100,
-    )
-
-    # 多头平仓 (1->0 或 1->-1)
-    long_exits = backtest_df[
-        (backtest_df["position_change"] < 0) & (backtest_df["position"].shift(1) == 1)
-    ]
-    plt.scatter(
-        long_exits.index,
-        long_exits["close"],
-        color="red",
-        marker="v",
-        alpha=1,
-        label="Long Exit",
-        s=100,
-    )
-
-    # 空头开仓 (0->-1)
-    short_entries = backtest_df[
-        (backtest_df["position_change"] == -1) & (backtest_df["position"] == -1)
-    ]
-    plt.scatter(
-        short_entries.index,
-        short_entries["close"],
-        color="red",
-        marker="v",
-        alpha=1,
-        label="Short Entry",
-        s=100,
-    )
-
-    # 空头平仓 (-1->0 或 -1->1)
-    short_exits = backtest_df[
-        (backtest_df["position_change"] > 0) & (backtest_df["position"].shift(1) == -1)
-    ]
-    plt.scatter(
-        short_exits.index,
-        short_exits["close"],
-        color="green",
-        marker="^",
-        alpha=1,
-        label="Short Exit",
-        s=100,
-    )
-
-    # Plot forced close points
-    if "forced_close" in backtest_df.columns:
-        forced_close = backtest_df[backtest_df["forced_close"] == 1]
-        if not forced_close.empty:
-            plt.scatter(
-                forced_close.index,
-                forced_close["close"],
-                color="purple",
-                marker="x",
-                alpha=1,
-                label="Forced Close (3 periods)",
-                s=100,
-            )
-
-    plt.title(
-        f"{symbol} Price with EMA-SMA Strategy (Long & Short, Max Hold: 3 periods)"
-    )
+    plt.title(f"{symbol} Price with EMA-SMA Strategy")
     plt.ylabel("Price")
     plt.legend()
-    plt.grid(True)
+    plt.grid(False)
 
     # Plot 2: Strategy Performance vs Buy & Hold
     plt.subplot(3, 1, 2)
@@ -659,56 +601,30 @@ def plot_results(backtest_df, symbol):
         alpha=0.5,
     )
 
-    # 标记持仓区间，而不是每个时间点
-    # 创建一个辅助函数来标识连续持仓区间
-    def mark_position_regions(df, position_value, color):
-        # 找出所有该仓位的开始和结束点
-        position_regions = []
-        in_position = False
-        start_idx = None
-
-        for i, pos in enumerate(df["position"]):
-            # 当进入仓位时
-            if pos == position_value and not in_position:
-                in_position = True
-                start_idx = i
-            # 当退出仓位时
-            elif pos != position_value and in_position:
-                in_position = False
-                # 添加区间
-                if start_idx is not None:
-                    position_regions.append((df.index[start_idx], df.index[i - 1]))
-
-        # 如果结束时仍在仓位中
-        if in_position and start_idx is not None:
-            position_regions.append((df.index[start_idx], df.index[-1]))
-
-        # 绘制所有区间
-        for start, end in position_regions:
-            plt.axvspan(start, end, color=color, alpha=0.15)
-
-    # 标记多头区域
-    mark_position_regions(backtest_df, 1, "green")
-    # 标记空头区域
-    mark_position_regions(backtest_df, -1, "red")
-
     plt.title(f"{symbol} Strategy Performance vs Buy & Hold")
     plt.ylabel("Return (%)")
     plt.legend()
-    plt.grid(True)
+    plt.grid(False)
 
-    # Plot 3: Drawdowns
+    # Plot 3: Drawdowns - Modified to be more intuitive
     plt.subplot(3, 1, 3)
-    plt.fill_between(
-        backtest_df.index, backtest_df["drawdown"], 0, color="red", alpha=0.3
-    )
+    # Convert drawdown to positive values for better visualization
+    positive_drawdown = -backtest_df["drawdown"]  # Make drawdown positive
+    plt.fill_between(backtest_df.index, 0, positive_drawdown, color="red", alpha=0.5)
     plt.title(f"{symbol} Drawdown")
     plt.ylabel("Drawdown (%)")
     plt.xlabel("Date")
-    plt.grid(True)
+    # Invert y-axis so larger drawdowns appear as deeper dips
+    plt.gca().invert_yaxis()
+    # Set y-ticks to show drawdown as positive percentages
+    max_dd = abs(backtest_df["drawdown"].min())
+    if max_dd > 0:
+        y_ticks = np.linspace(0, max_dd, 6)
+        plt.yticks(y_ticks, [f"{y:.1f}%" for y in y_ticks])
+    plt.grid(False)
 
     plt.tight_layout()
-    plt.savefig(f"backtest_result_f5/backtest_results_{symbol}.png")
+    plt.savefig(f"backtest/backtest_result_f5/backtest_results_{symbol}.png")
     plt.close()
 
 
@@ -737,7 +653,6 @@ def process_single_file(csv_file):
         # Apply f5 strategy
         df = f5_strategy(df)
 
-        # Run backtest
         backtest_df = backtest(df)
 
         # Analyze results
@@ -758,7 +673,7 @@ def main():
     start_time = time.time()
 
     # Create result directories
-    results_dir = "backtest_result_f5"
+    results_dir = "backtest/backtest_result_f5"
     log_dir = os.path.join(results_dir, "logs")
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)

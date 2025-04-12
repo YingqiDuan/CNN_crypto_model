@@ -638,7 +638,7 @@ def plot_roc_curves(y_true, y_probs, num_classes=3, save_dir="plots"):
     plt.ylabel("True Positive Rate")
     plt.title("Receiver Operating Characteristic (ROC) Curves")
     plt.legend(loc="lower right")
-    plt.grid(True)
+    plt.grid(False)
     plt.savefig(os.path.join(save_dir, "roc_curves.png"))
     plt.close()
     print(f"ROC curves saved to {save_dir}/roc_curves.png")
@@ -724,7 +724,7 @@ def plot_learning_curves(history, save_dir="plots"):
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
-    plt.grid(True)
+    plt.grid(False)
     plt.savefig(os.path.join(save_dir, "loss_curve.png"))
     plt.close()
 
@@ -736,7 +736,7 @@ def plot_learning_curves(history, save_dir="plots"):
     plt.xlabel("Epochs")
     plt.ylabel("Accuracy (%)")
     plt.legend()
-    plt.grid(True)
+    plt.grid(False)
     plt.savefig(os.path.join(save_dir, "accuracy_curve.png"))
     plt.close()
 
