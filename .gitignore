@@ -11,3 +11,4 @@ model/
 tensorboard/
 run/
 backtest/
+*.png

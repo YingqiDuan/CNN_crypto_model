@@ -9,7 +9,7 @@ from binance.um_futures import UMFutures
 from get_trading_pairs import coins
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from cnn import CNN_4h
+from cnn import CNN_4h_2
 
 
 def get_data(client, coin, interval, candlesticks):
@@ -96,7 +96,7 @@ def load_model(model_path, device):
     Returns:
         nn.Module: Loaded CNN model.
     """
-    model = CNN_4h()
+    model = CNN_4h_2()
     model.load_state_dict(
         torch.load(model_path, map_location=device, weights_only=True)
     )

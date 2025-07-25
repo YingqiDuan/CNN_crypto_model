@@ -10,18 +10,211 @@ from tqdm import tqdm
 import multiprocessing
 import psutil
 import warnings
+from config_backtest import (
+    STRATEGY_CONFIG,
+    BACKTEST_CONFIG,
+    DATA_CONFIG,
+    RESULTS_CONFIG,
+    MULTIPROCESSING_CONFIG,
+)
 
 # Ignore warnings to reduce output noise
 warnings.filterwarnings("ignore")
 
 
-# Import the indicator functions
-def sma(df, window):
+# Create a Strategy class to decouple strategy parameters
+class F5Strategy:
+    def __init__(self, ema_window=None, sma_window=None):
+        # Use config values or provided values
+        self.ema_window = (
+            ema_window if ema_window is not None else STRATEGY_CONFIG["ema_window"]
+        )
+        self.sma_window = (
+            sma_window if sma_window is not None else STRATEGY_CONFIG["sma_window"]
+        )
+
+    def calculate_ema(self, df):
+        """Calculate Exponential Moving Average"""
+        return df["close"].ewm(span=self.ema_window, adjust=False).mean()
+
+    def calculate_sma(self, df):
+        """Calculate Simple Moving Average"""
+        return df["close"].rolling(window=self.sma_window).mean()
+
+    def generate_signals(self, df):
+        """Generate trading signals based on EMA/SMA crossover"""
+        # Make a copy to avoid modifying the original
+        strategy_df = df.copy()
+
+        # Calculate indicators
+        # strategy_df["ema"] = self.calculate_ema(strategy_df)
+        # strategy_df["sma"] = self.calculate_sma(strategy_df)
+        strategy_df["sma_60"] = sma(strategy_df, window=60)
+        # strategy_df["kdj_k"], strategy_df["kdj_d"], strategy_df["kdj_j"] = kdj(
+        #     strategy_df, window=9, k_s=3, d_s=3
+        # )
+        strategy_df["macd"], strategy_df["dif"], strategy_df["dea"] = macd(
+            strategy_df, fast_period=6, slow_period=12, signal_period=9
+        )
+        # strategy_df["bb_upper"], strategy_df["bb_lower"] = bb(
+        #     strategy_df, window=20, std_dev=0.8
+        # )
+        strategy_df["rsi"] = rsi(strategy_df, window=6)
+        strategy_df["stochrsi"], strategy_df["mastochrsi"] = stochrsi(
+            strategy_df, rsi_col="rsi", stoch_window=6, k_window=3, d_window=3
+        )
+        # Initialize signal column
+        strategy_df["signal"] = 0
+
+        # Buy signals (1)
+        """
+        buy_condition = (
+            (strategy_df["ema"].shift(1) < strategy_df["sma"].shift(1))
+            & (strategy_df["ema"] > strategy_df["sma"])
+            & (strategy_df["ema"] > strategy_df["ema"].shift(1))
+            & (strategy_df["sma"] > strategy_df["sma"].shift(1))
+            & (strategy_df["close"] - strategy_df["open"] > 0)
+            & (strategy_df["close"].shift(1) - strategy_df["open"].shift(1) < 0)
+            & (strategy_df["bb_upper"] > strategy_df["bb_upper"].shift(1))
+            & (strategy_df["bb_lower"] > strategy_df["bb_lower"].shift(1))
+            & (strategy_df["sma"] > strategy_df["bb_upper"])
+            & (strategy_df["macd"] > 0)
+        )
+
+        # Sell signals (-1)
+        sell_condition = (
+            (strategy_df["ema"].shift(1) > strategy_df["sma"].shift(1))
+            & (strategy_df["ema"] < strategy_df["sma"])
+            & (strategy_df["ema"] < strategy_df["ema"].shift(1))
+            & (strategy_df["sma"] < strategy_df["sma"].shift(1))
+            & (strategy_df["close"] - strategy_df["open"] < 0)
+            & (strategy_df["close"].shift(1) - strategy_df["open"].shift(1) > 0)
+            & (strategy_df["bb_upper"] < strategy_df["bb_upper"].shift(1))
+            & (strategy_df["bb_lower"] < strategy_df["bb_lower"].shift(1))
+            & (strategy_df["sma"] < strategy_df["bb_lower"])
+            & (strategy_df["macd"] < 0)
+        )
+        """
+
+        buy_condition = (
+            (strategy_df["sma_60"] > strategy_df["sma_60"].shift(1))
+            & (strategy_df["stochrsi"].shift(1) < strategy_df["mastochrsi"].shift(1))
+            & (strategy_df["stochrsi"] > strategy_df["stochrsi"].shift(1))
+            & (strategy_df["macd"] > 0)
+            & (strategy_df["dea"] > 0)
+        )
+
+        sell_condition = (
+            (strategy_df["sma_60"] < strategy_df["sma_60"].shift(1))
+            & (strategy_df["stochrsi"].shift(1) > strategy_df["mastochrsi"].shift(1))
+            & (strategy_df["stochrsi"] < strategy_df["stochrsi"].shift(1))
+            & (strategy_df["macd"] < 0)
+            & (strategy_df["dea"] < 0)
+        )
+
+        # Set signals
+        strategy_df.loc[buy_condition, "signal"] = 1
+        strategy_df.loc[sell_condition, "signal"] = -1
+
+        # Filter out signals that occur within 15 periods of a previous signal of the same direction
+        # Make a copy of the original signals
+        original_signals = strategy_df["signal"].copy()
+
+        # Iterate through the dataframe to check previous signals
+        for i in range(len(strategy_df)):
+            if (
+                strategy_df["signal"].iloc[i] != 0
+            ):  # If there's a signal at this position
+                signal_direction = strategy_df["signal"].iloc[
+                    i
+                ]  # Get signal direction (1 or -1)
+
+                # Define the lookback period (min of current index and 15)
+                lookback = min(i, 15)
+
+                # Check if there's a signal of the same direction in the previous 15 periods
+                if lookback > 0:
+                    previous_signals = original_signals.iloc[i - lookback : i]
+                    if any(previous_signals == signal_direction):
+                        # If there was a signal of the same direction in the lookback period,
+                        # cancel this signal by setting it to 0
+                        strategy_df["signal"].iloc[i] = 0
+
+        return strategy_df
+
+
+# Legacy indicator functions for backward compatibility
+def sma(df, window=None):
+    if window is None:
+        window = STRATEGY_CONFIG["sma_window"]
     return df["close"].rolling(window=window).mean()
 
 
-def ema(df, window):
+def ema(df, window=None):
+    if window is None:
+        window = STRATEGY_CONFIG["ema_window"]
     return df["close"].ewm(span=window, adjust=False).mean()
+
+
+def macd(df, fast_period=12, slow_period=26, signal_period=9):
+    fast_ema = df["close"].ewm(span=fast_period, adjust=False).mean()
+    slow_ema = df["close"].ewm(span=slow_period, adjust=False).mean()
+    macd_line = fast_ema - slow_ema
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    return macd_line - signal_line, macd_line, signal_line
+
+
+def kdj(df, window=9, k_s=3, d_s=3):
+    high = df["high"].rolling(window=window, min_periods=1).max()
+    low = df["low"].rolling(window=window, min_periods=1).min()
+    rsv = (df["close"] - low) / (high - low) * 100
+    k = rsv.ewm(alpha=1 / k_s, adjust=False).mean()
+    d = k.ewm(alpha=1 / d_s, adjust=False).mean()
+    j = 3 * k - 2 * d
+    return k, d, j
+
+
+def bb(df, window=20, std_dev=2):
+    """Calculate Bollinger Bands"""
+    moving_avg = df["close"].rolling(window=window).mean()
+    std_dev = df["close"].rolling(window=window).std()
+    upper_band = moving_avg + std_dev * std_dev
+    lower_band = moving_avg - std_dev * std_dev
+    return upper_band, lower_band
+
+
+def rsi(df, window=14):
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    first_gain = gain.rolling(window).mean().shift(1)
+    first_loss = loss.rolling(window).mean().shift(1)
+    avg_gain = gain.ewm(alpha=1 / window, adjust=False).mean().combine_first(first_gain)
+    avg_loss = loss.ewm(alpha=1 / window, adjust=False).mean().combine_first(first_loss)
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def stochrsi(
+    df,
+    rsi_col="rsi",
+    stoch_window=14,
+    k_window=3,
+    d_window=3,
+):
+
+    rsi = df[rsi_col]
+
+    rsi_min = rsi.rolling(window=stoch_window).min()
+    rsi_max = rsi.rolling(window=stoch_window).max()
+
+    stoch = (rsi - rsi_min) / (rsi_max - rsi_min)
+
+    stochrsi = stoch.rolling(window=k_window).mean() * 100
+    mastochrsi = stochrsi.rolling(window=d_window).mean()
+
+    return stochrsi, mastochrsi
 
 
 def clean_data(df):
@@ -29,8 +222,23 @@ def clean_data(df):
     # Convert timestamp to datetime
     df["open_time"] = pd.to_datetime(df["open_time"])
 
+    df["open_time"] = df["open_time"]
+
     # Set index to datetime
     df = df.set_index("open_time")
+
+    df.drop(
+        columns=[
+            "volume",
+            "volume",
+            "quote_asset_volume",
+            "number_of_trades",
+            "taker_buy_base_asset_volume",
+            "taker_buy_quote_asset_volume",
+        ],
+        inplace=True,
+        errors="ignore",
+    )
 
     # Ensure numeric columns are float
     numeric_cols = [
@@ -38,246 +246,187 @@ def clean_data(df):
         "high",
         "low",
         "close",
-        "volume",
-        "quote_asset_volume",
-        "number_of_trades",
-        "taker_buy_base_asset_volume",
-        "taker_buy_quote_asset_volume",
     ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(float)
-
+    df[numeric_cols] = df[numeric_cols].astype(float)
     return df
 
 
+# Legacy strategy function for backward compatibility
 def f5_strategy(df):
-    """
-    Implements the f5 strategy from ema.py:
-    - Checks for EMA5 crossing above SMA5 (buy signal)
-    - Checks for EMA5 crossing below SMA5 (sell signal)
-    - Confirms trend direction
-
-    Returns DataFrame with signal column (1 for buy, -1 for sell, 0 for no action)
-    """
-    # Calculate indicators
-    df["ema5"] = ema(df, 5)
-    df["sma5"] = sma(df, 5)
-
-    # Initialize signal column
-    df["signal"] = 0
-
-    # Buy signals (1)
-    buy_condition = (
-        (df["ema5"].shift(1) < df["sma5"].shift(1))
-        & (df["ema5"] > df["sma5"])
-        & (df["ema5"] > df["ema5"].shift(1))
-    )
-
-    # Sell signals (-1)
-    sell_condition = (
-        (df["ema5"].shift(1) > df["sma5"].shift(1))
-        & (df["ema5"] < df["sma5"])
-        & (df["ema5"] < df["ema5"].shift(1))
-    )
-
-    # Set signals
-    df.loc[buy_condition, "signal"] = 1
-    df.loc[sell_condition, "signal"] = -1
-
-    return df
+    strategy = F5Strategy()
+    return strategy.generate_signals(df)
 
 
 def backtest(
-    df, initial_capital=10000.0, position_size=1, fee_rate=0.0005, max_hold_periods=2
+    df, initial_capital=None, position_size=None, fee_rate=None, max_hold_periods=None
 ):
-    """
-    Backtest the strategy on historical data
+    # Use config values if parameters are not provided
+    if initial_capital is None:
+        initial_capital = BACKTEST_CONFIG["initial_capital"]
+    if position_size is None:
+        position_size = BACKTEST_CONFIG["position_size"]
+    if fee_rate is None:
+        fee_rate = BACKTEST_CONFIG["fee_rate"]
+    if max_hold_periods is None:
+        max_hold_periods = BACKTEST_CONFIG["max_hold_periods"]
 
-    Parameters:
-    - df: DataFrame with price data and signals
-    - initial_capital: Starting capital amount
-    - position_size: Percentage of capital to allocate per trade (0-1)
-    - fee_rate: Trading fee rate (e.g., 0.0004 = 0.04%)
-    - max_hold_periods: Maximum number of periods to hold a position
-
-    Returns:
-    - DataFrame with backtesting results
-    """
     # Create a copy of the DataFrame to avoid modifying the original
     backtest_df = df.copy()
 
     # Initialize columns for backtesting
     backtest_df["position"] = 0  # 0 = no position, 1 = long, -1 = short
     backtest_df["entry_price"] = 0.0  # Entry price for current position
-    backtest_df["capital"] = initial_capital  # Current capital
+    backtest_df["capital"] = initial_capital  # Current available capital
+    backtest_df["margin"] = 0.0  # Amount of capital allocated as margin
     backtest_df["holdings"] = (
-        0.0  # Value of current holdings (positive for long, negative for short)
+        0.0  # Current value of holdings (can be positive or negative)
     )
-    backtest_df["unrealized_pnl"] = (
-        0.0  # Track unrealized profit/loss for short positions
-    )
-    backtest_df["total_value"] = initial_capital  # Capital + holdings + unrealized P&L
+    backtest_df["total_value"] = initial_capital  # Capital + holdings
     backtest_df["hold_periods"] = 0  # Number of periods a position has been held
     backtest_df["forced_close"] = (
         0  # Indicator for forced close due to max hold periods
     )
 
+    # Pre-calculate arrays for better performance
+    close_prices = backtest_df["close"].values
+    signals = backtest_df["signal"].values
+
+    # Initialize variables
     position = 0  # 0 = no position, 1 = long, -1 = short
     entry_price = 0
     capital = initial_capital
-    holdings = 0
-    unrealized_pnl = 0.0  # Track unrealized P&L
-    hold_periods = 0  # 持仓周期计数器
+    margin = 0.0  # Amount allocated as margin
+    holdings = 0.0
+    hold_periods = 0
 
-    # Loop through the data to simulate trading
+    # Arrays to store results
+    positions = np.zeros(len(backtest_df))
+    entry_prices = np.zeros(len(backtest_df))
+    capitals = np.zeros(len(backtest_df))
+    margins = np.zeros(len(backtest_df))
+    holdings_array = np.zeros(len(backtest_df))
+    total_values = np.zeros(len(backtest_df))
+    hold_periods_array = np.zeros(len(backtest_df))
+    forced_closes = np.zeros(len(backtest_df))
+
+    # Set initial values
+    positions[0] = 0
+    entry_prices[0] = 0
+    capitals[0] = initial_capital
+    margins[0] = 0
+    holdings_array[0] = 0
+    total_values[0] = initial_capital
+    hold_periods_array[0] = 0
+    forced_closes[0] = 0
+
+    # Loop through the data to simulate trading (start from index 1)
     for i in range(1, len(backtest_df)):
-        curr_price = backtest_df["close"].iloc[i]
-        signal = backtest_df["signal"].iloc[i]
+        curr_price = close_prices[i]  # 当前K线收盘价（用于平仓）
+        prev_price = close_prices[i - 1]  # 前一K线收盘价（用于开仓）
+        signal = signals[i]
 
         # 强制平仓标志
         force_close = False
         if position != 0 and hold_periods >= max_hold_periods:
             force_close = True
-            backtest_df.loc[backtest_df.index[i], "forced_close"] = 1
+            forced_closes[i] = 1
 
         # 处理信号和强制平仓
         # 情况1: 当前无仓位，遇到买入信号，开多仓
         if signal == 1 and position == 0:
-            # Calculate position size
-            trade_size = capital * position_size
+            # Calculate margin size (amount to allocate to the position)
+            margin = capital * position_size
             # Calculate fees
-            fee = trade_size * fee_rate
-            # Calculate amount after fees
-            amount_after_fees = trade_size - fee
-            # Calculate shares bought
-            shares_bought = amount_after_fees / curr_price
+            fee = margin * fee_rate
+            # Reduce available capital
+            capital -= margin
+            capital -= fee  # Deduct fee from capital
             # Update position
             position = 1
-            entry_price = curr_price
-            capital -= trade_size
-            holdings = shares_bought * curr_price
-            unrealized_pnl = 0.0  # Reset unrealized P&L
+            entry_price = prev_price  # 使用前一K线收盘价为入场价格
+            # Calculate current holdings value
+            holdings = margin * (curr_price / entry_price)
             hold_periods = 0  # 重置持仓周期计数器
 
         # 情况2: 当前无仓位，遇到卖出信号，开空仓
         elif signal == -1 and position == 0:
-            # Calculate position size
-            trade_size = capital * position_size
+            # Calculate margin size (amount to allocate to the position)
+            margin = capital * position_size
             # Calculate fees
-            fee = trade_size * fee_rate
-            # Calculate amount after fees
-            amount_after_fees = trade_size - fee
-            # Calculate shares shorted
-            shares_shorted = amount_after_fees / curr_price
+            fee = margin * fee_rate
+            # Reduce available capital
+            capital -= margin
+            capital -= fee  # Deduct fee from capital
             # Update position
             position = -1
-            entry_price = curr_price
-            capital -= fee  # 只扣除手续费
-            holdings = -shares_shorted * curr_price  # 负值表示空头持仓
-            unrealized_pnl = 0.0  # Reset unrealized P&L
+            entry_price = prev_price  # 使用前一K线收盘价为入场价格
+            # Calculate current holdings value (negative for short)
+            holdings = -margin * (entry_price / curr_price)
             hold_periods = 0  # 重置持仓周期计数器
 
         # 情况3: 当前持有多仓，遇到卖出信号或强制平仓，平多仓
         elif (signal == -1 or force_close) and position == 1:
-            # Calculate value before fees
-            value_before_fees = holdings * curr_price / entry_price
-            # Calculate fees
-            fee = value_before_fees * fee_rate
-            # Update capital
-            capital += value_before_fees - fee
+            # Calculate the current value of holdings
+            current_value = margin * (curr_price / entry_price)
+            # Calculate fees for closing (based on current value)
+            fee = current_value * fee_rate
+            # Return margin plus/minus profit/loss and minus fees to capital
+            capital += current_value - fee
 
-            # 如果有卖出信号，则直接开空仓
-            if signal == -1 and not force_close:
-                # Calculate new position size
-                trade_size = capital * position_size
-                # Calculate fees
-                fee = trade_size * fee_rate
-                # Calculate amount after fees
-                amount_after_fees = trade_size - fee
-                # Calculate shares shorted
-                shares_shorted = amount_after_fees / curr_price
-                # Update position
-                position = -1
-                entry_price = curr_price
-                capital -= fee  # 只扣除手续费
-                holdings = -shares_shorted * curr_price  # 负值表示空头持仓
-                unrealized_pnl = 0.0  # Reset unrealized P&L
-                hold_periods = 0  # 重置持仓周期计数器
-            else:
-                # 强制平仓，不开新仓位
-                position = 0
-                entry_price = 0
-                holdings = 0
-                unrealized_pnl = 0.0  # Reset unrealized P&L
-                hold_periods = 0  # 重置持仓周期计数器
+            # Reset position
+            position = 0
+            entry_price = 0
+            margin = 0.0
+            holdings = 0.0
+            hold_periods = 0  # 重置持仓周期计数器
 
         # 情况4: 当前持有空仓，遇到买入信号或强制平仓，平空仓
         elif (signal == 1 or force_close) and position == -1:
-            # Calculate profit/loss - for short positions, profit when price decreases
-            profit = -holdings * (1 - curr_price / entry_price)
-            # Calculate fees
-            fee = abs(profit) * fee_rate
-            # Update capital
-            capital += profit - fee
+            # Calculate the current value of short position
+            # For shorts: positive return when price falls
+            current_value = margin * (entry_price / curr_price)
+            # Calculate fees for closing (based on current value)
+            fee = current_value * fee_rate
+            # Return margin plus/minus profit/loss and minus fees to capital
+            capital += current_value - fee
 
-            # 如果有买入信号，则直接开多仓
-            if signal == 1 and not force_close:
-                # Calculate new position size
-                trade_size = capital * position_size
-                # Calculate fees
-                fee = trade_size * fee_rate
-                # Calculate amount after fees
-                amount_after_fees = trade_size - fee
-                # Calculate shares bought
-                shares_bought = amount_after_fees / curr_price
-                # Update position
-                position = 1
-                entry_price = curr_price
-                capital -= trade_size
-                holdings = shares_bought * curr_price
-                unrealized_pnl = 0.0  # Reset unrealized P&L
-                hold_periods = 0  # 重置持仓周期计数器
-            else:
-                # 强制平仓，不开新仓位
-                position = 0
-                entry_price = 0
-                holdings = 0
-                unrealized_pnl = 0.0  # Reset unrealized P&L
-                hold_periods = 0  # 重置持仓周期计数器
+            # Reset position
+            position = 0
+            entry_price = 0
+            margin = 0.0
+            holdings = 0.0
+            hold_periods = 0  # 重置持仓周期计数器
 
         # 更新持仓价值
         if position == 1:
             # 多头持仓价值随价格变化
-            holdings = holdings * curr_price / backtest_df["close"].iloc[i - 1]
+            holdings = margin * (curr_price / entry_price)
             hold_periods += 1
-            unrealized_pnl = 0.0  # 多头的未实现损益已经包含在holdings中
         elif position == -1:
-            # 空头持仓价值随价格变化（反向）
-            old_holdings = holdings
-            holdings = holdings * curr_price / backtest_df["close"].iloc[i - 1]
-            # 计算空头的未实现盈亏 - 价格下跌时获利，价格上涨时亏损
-            unrealized_pnl = -holdings * (1 - curr_price / entry_price)
+            # 空头持仓价值随价格变化
+            holdings = -margin * (entry_price / curr_price)
             hold_periods += 1
 
-        # Update backtest DataFrame
-        backtest_df.loc[backtest_df.index[i], "position"] = position
-        backtest_df.loc[backtest_df.index[i], "entry_price"] = entry_price
-        backtest_df.loc[backtest_df.index[i], "capital"] = capital
-        backtest_df.loc[backtest_df.index[i], "holdings"] = holdings
-        backtest_df.loc[backtest_df.index[i], "unrealized_pnl"] = unrealized_pnl
+        # Store values in arrays
+        positions[i] = position
+        entry_prices[i] = entry_price
+        capitals[i] = capital
+        margins[i] = margin
+        holdings_array[i] = holdings
 
-        # Fix total_value calculation: different handling for long vs short positions
-        if position == 1:  # Long position
-            backtest_df.loc[backtest_df.index[i], "total_value"] = capital + holdings
-        elif position == -1:  # Short position
-            backtest_df.loc[backtest_df.index[i], "total_value"] = (
-                capital + unrealized_pnl
-            )
-        else:  # No position
-            backtest_df.loc[backtest_df.index[i], "total_value"] = capital
+        # Calculate total value
+        total_values[i] = capital + holdings
+        hold_periods_array[i] = hold_periods
 
-        backtest_df.loc[backtest_df.index[i], "hold_periods"] = hold_periods
+    # Update the DataFrame with the calculated arrays
+    backtest_df["position"] = positions
+    backtest_df["entry_price"] = entry_prices
+    backtest_df["capital"] = capitals
+    backtest_df["margin"] = margins
+    backtest_df["holdings"] = holdings_array
+    backtest_df["total_value"] = total_values
+    backtest_df["hold_periods"] = hold_periods_array
+    backtest_df["forced_close"] = forced_closes
 
     # Calculate returns and metrics
     backtest_df["return"] = (
@@ -286,6 +435,12 @@ def backtest(
     backtest_df["benchmark_return"] = (
         backtest_df["close"] / backtest_df["close"].iloc[0] - 1
     )
+
+    # Calculate drawdown more efficiently
+    backtest_df["cummax"] = np.maximum.accumulate(backtest_df["total_value"].values)
+    backtest_df["drawdown"] = (
+        backtest_df["total_value"] / backtest_df["cummax"] - 1
+    ) * 100
 
     return backtest_df
 
@@ -389,6 +544,7 @@ def analyze_results(backtest_df, symbol):
                         "exit_price": exit_price,
                         "profit_pct": profit_pct,
                         "forced": forced,
+                        "capital_after_trade": backtest_df["capital"].iloc[i],
                     }
                 )
 
@@ -480,7 +636,7 @@ def analyze_results(backtest_df, symbol):
         ((1 + total_return / 100) ** (1 / years) - 1) * 100 if years > 0 else 0
     )
 
-    # Calculate max drawdown
+    # Calculate max drawdown more efficiently
     backtest_df["cummax"] = backtest_df["total_value"].cummax()
     backtest_df["drawdown"] = (
         backtest_df["total_value"] / backtest_df["cummax"] - 1
@@ -489,14 +645,16 @@ def analyze_results(backtest_df, symbol):
 
     # Calculate Sharpe ratio (assuming risk-free rate of 0)
     risk_free_rate = 0
-    if backtest_df["daily_return"].std() != 0:
-        sharpe_ratio = (
-            (backtest_df["daily_return"].mean() - risk_free_rate)
-            / backtest_df["daily_return"].std()
-            * (365**0.5)
-        )
-    else:
+    daily_std = backtest_df["daily_return"].std()
+    # FIX: Properly handle zero standard deviation
+    if daily_std is None or np.isnan(daily_std) or daily_std == 0:
         sharpe_ratio = 0
+    else:
+        daily_mean = backtest_df["daily_return"].mean()
+        if np.isnan(daily_mean):
+            sharpe_ratio = 0
+        else:
+            sharpe_ratio = (daily_mean - risk_free_rate) / daily_std * (365**0.5)
 
     # 准备要输出的性能摘要文本
     summary_text = f"\n----- Performance Summary for {symbol} -----\n"
@@ -531,7 +689,7 @@ def analyze_results(backtest_df, symbol):
     print(summary_text)
 
     # 确保目录存在
-    log_dir = "backtest/backtest_result_f5/logs"
+    log_dir = RESULTS_CONFIG["logs_dir"]
     os.makedirs(log_dir, exist_ok=True)
 
     # 保存到文本文件
@@ -574,8 +732,6 @@ def plot_results(backtest_df, symbol):
     # Plot 1: Price with buy/sell signals
     plt.subplot(3, 1, 1)
     plt.plot(backtest_df.index, backtest_df["close"], label="Price", alpha=0.5)
-    plt.plot(backtest_df.index, backtest_df["ema5"], label="EMA(5)", color="blue")
-    plt.plot(backtest_df.index, backtest_df["sma5"], label="SMA(5)", color="red")
 
     # 计算position列的差分用于其他功能
     backtest_df["position_change"] = backtest_df["position"].diff()
@@ -624,7 +780,11 @@ def plot_results(backtest_df, symbol):
     plt.grid(False)
 
     plt.tight_layout()
-    plt.savefig(f"backtest/backtest_result_f5/backtest_results_{symbol}.png")
+
+    # 保存图形
+    results_dir = RESULTS_CONFIG["results_dir"]
+    os.makedirs(results_dir, exist_ok=True)
+    plt.savefig(f"{results_dir}/backtest_results_{symbol}.png", dpi=150)
     plt.close()
 
 
@@ -639,21 +799,60 @@ def process_single_file(csv_file):
         # Reduce print statements when using multiprocessing to avoid console clutter
         # print(f"Processing {symbol}...")
 
-        # Read CSV file
-        df = pd.read_csv(csv_file)
+        # Read CSV file with optimized data types
+        dtype_mapping = {
+            "open": "float32",
+            "high": "float32",
+            "low": "float32",
+            "close": "float32",
+            "volume": "float32",
+            "quote_asset_volume": "float32",
+            "number_of_trades": "int32",
+            "taker_buy_base_asset_volume": "float32",
+            "taker_buy_quote_asset_volume": "float32",
+        }
+
+        # Add data validation
+        try:
+            df = pd.read_csv(csv_file, dtype=dtype_mapping)
+
+            # Validate required columns
+            required_columns = ["open_time", "open", "high", "low", "close", "volume"]
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                print(f"Error: Missing columns in {csv_file}: {missing_columns}")
+                return None
+
+        except Exception as e:
+            print(f"Error reading {csv_file}: {e}")
+            return None
 
         # Clean data
         df = clean_data(df)
 
         # Skip if not enough data
-        if len(df) < 100:
-            # print(f"Skipping {symbol} - not enough data")
+        min_data_length = max(100, STRATEGY_CONFIG["sma_window"] * 2)
+        if len(df) < min_data_length:
+            # print(f"Skipping {symbol} - not enough data (require {min_data_length} rows)")
             return None
 
-        # Apply f5 strategy
-        df = f5_strategy(df)
+        # Create strategy instance with config parameters
+        strategy = F5Strategy(
+            ema_window=STRATEGY_CONFIG["ema_window"],
+            sma_window=STRATEGY_CONFIG["sma_window"],
+        )
 
-        backtest_df = backtest(df)
+        # Apply strategy to generate signals
+        df = strategy.generate_signals(df)
+
+        # Use parameters from config file for backtesting
+        backtest_df = backtest(
+            df,
+            initial_capital=BACKTEST_CONFIG["initial_capital"],
+            position_size=BACKTEST_CONFIG["position_size"],
+            fee_rate=BACKTEST_CONFIG["fee_rate"],
+            max_hold_periods=BACKTEST_CONFIG["max_hold_periods"],
+        )
 
         # Analyze results
         result = analyze_results(backtest_df, symbol)
@@ -668,13 +867,33 @@ def process_single_file(csv_file):
         return None
 
 
+# 将嵌套函数移到模块级，以解决pickle序列化错误
+def process_single_file_with_lock(csv_file, results, file_lock):
+    """
+    处理单个文件并使用锁保护共享资源
+
+    Args:
+        csv_file: 要处理的CSV文件路径
+        results: 共享的结果列表
+        file_lock: 文件锁对象，用于保护并发写入
+    """
+    result = process_single_file(csv_file)
+    if result:
+        with file_lock:
+            # 使用特定于符号的文件以减少争用
+            symbol = result["symbol"]
+            # 这里可以添加其他进程安全的日志记录
+        results.append(result)
+    return result
+
+
 def main():
     # Record start time
     start_time = time.time()
 
-    # Create result directories
-    results_dir = "backtest/backtest_result_f5"
-    log_dir = os.path.join(results_dir, "logs")
+    # Create result directories from config
+    results_dir = RESULTS_CONFIG["results_dir"]
+    log_dir = RESULTS_CONFIG["logs_dir"]
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
@@ -683,11 +902,12 @@ def main():
         f.write(f"回测开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("-" * 50 + "\n\n")
 
-    # Directory with CSV files
-    data_dir = "merged_csv"
+    # Directory with CSV files from config
+    data_dir = DATA_CONFIG["data_dir"]
+    file_pattern = DATA_CONFIG["file_pattern"]
 
     # Get list of CSV files
-    csv_files = glob.glob(os.path.join(data_dir, "*_15m_*.csv"))
+    csv_files = glob.glob(os.path.join(data_dir, file_pattern))
 
     # Limit to first 5 files for testing (remove this line to process all files)
     # csv_files = csv_files[:5]
@@ -696,38 +916,48 @@ def main():
     manager = multiprocessing.Manager()
     results = manager.list()
 
+    # Add a lock for file writing to prevent race conditions
+    file_lock = manager.Lock()
+
     # Get CPU info
     cpu_count = psutil.cpu_count(logical=True)
     physical_cpu = psutil.cpu_count(logical=False)
 
-    # Determine optimal number of processes
-    # Use physical cores + 1 as a good starting point (avoid hyperthreading overhead)
-    # If physical core count isn't available, use 75% of logical cores
-    if physical_cpu:
-        max_workers = min(physical_cpu + 1, cpu_count)
+    # Determine optimal number of processes from config
+    if MULTIPROCESSING_CONFIG["physical_cpu_multiplier"] is not None and physical_cpu:
+        max_workers = min(
+            int(physical_cpu * MULTIPROCESSING_CONFIG["physical_cpu_multiplier"]),
+            cpu_count,
+        )
     else:
-        max_workers = max(1, int(cpu_count * 0.75))
+        max_workers = max(
+            1, int(cpu_count * MULTIPROCESSING_CONFIG["logical_cpu_percent"])
+        )
+
+    # Add resource limitation to prevent memory issues
+    # Limit to slightly fewer processes than calculated to leave room for system
+    max_workers = max(1, min(max_workers, cpu_count - 1))
 
     print(f"System has {cpu_count} logical cores and {physical_cpu} physical cores")
     print(f"Using {max_workers} worker processes")
 
     # Process files in parallel using ProcessPoolExecutor
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
+        # Submit all tasks, 传递额外的参数到全局函数
         futures = [
-            executor.submit(process_single_file, csv_file) for csv_file in csv_files
+            executor.submit(process_single_file_with_lock, csv_file, results, file_lock)
+            for csv_file in csv_files
         ]
 
-        # Process results as they complete
+        # Process results as they complete with progress bar
         for future in tqdm(
             concurrent.futures.as_completed(futures),
             total=len(csv_files),
             desc="Processing files",
         ):
             try:
-                result = future.result()
-                if result:
-                    results.append(result)
+                # We don't need to do anything here as results are collected in the worker function
+                future.result()
             except Exception as e:
                 print(f"Error in worker process: {e}")
 
@@ -841,110 +1071,131 @@ def main():
         print(f"Average Max Drawdown: {results_df['max_drawdown'].mean():.2f}%")
 
         # 将汇总信息保存到日志文件
-        with open(os.path.join(log_dir, "summary_performance.txt"), "w") as f:
-            f.write("\n----- Top 10 Performers -----\n")
-            f.write(
-                results_df.head(10)[
-                    [
-                        "symbol",
-                        "total_return",
-                        "buy_hold_return",
-                        "outperformance",
-                        "num_trades",
-                        "overall_win_rate",
-                    ]
-                ].to_string()
-                + "\n\n"
-            )
-
-            f.write("\n----- Bottom 10 Performers -----\n")
-            f.write(
-                results_df.tail(10)[
-                    [
-                        "symbol",
-                        "total_return",
-                        "buy_hold_return",
-                        "outperformance",
-                        "num_trades",
-                        "overall_win_rate",
-                    ]
-                ].to_string()
-                + "\n\n"
-            )
-
-            # 保存多空策略对比
-            if not long_short_compare.empty:
-                f.write("\n----- Long vs Short Strategy Performance -----\n")
-
-                f.write("\n--- Coins Better for Long Trading ---\n")
+        # Use lock for final summary file to ensure it's written atomically
+        with file_lock:
+            with open(os.path.join(log_dir, "summary_performance.txt"), "w") as f:
+                f.write("\n----- Top 10 Performers -----\n")
                 f.write(
-                    long_short_compare.head(10)[
+                    results_df.head(10)[
                         [
                             "symbol",
-                            "long_avg_profit",
-                            "long_win_rate",
-                            "short_avg_profit",
-                            "short_win_rate",
-                            "long_short_diff",
+                            "total_return",
+                            "buy_hold_return",
+                            "outperformance",
+                            "num_trades",
+                            "overall_win_rate",
                         ]
                     ].to_string()
                     + "\n\n"
                 )
 
-                f.write("\n--- Coins Better for Short Trading ---\n")
+                f.write("\n----- Bottom 10 Performers -----\n")
                 f.write(
-                    long_short_compare.tail(10)[
+                    results_df.tail(10)[
                         [
                             "symbol",
-                            "long_avg_profit",
-                            "long_win_rate",
-                            "short_avg_profit",
-                            "short_win_rate",
-                            "long_short_diff",
+                            "total_return",
+                            "buy_hold_return",
+                            "outperformance",
+                            "num_trades",
+                            "overall_win_rate",
                         ]
                     ].to_string()
                     + "\n\n"
                 )
 
-            f.write("\n----- Average Performance -----\n")
-            f.write(f"Average Total Return: {results_df['total_return'].mean():.2f}%\n")
-            f.write(
-                f"Average Buy & Hold Return: {results_df['buy_hold_return'].mean():.2f}%\n"
-            )
-            f.write(
-                f"Average Outperformance: {results_df['outperformance'].mean():.2f}%\n"
-            )
-            f.write(
-                f"Average Number of Trades: {results_df['num_trades'].mean():.2f}\n"
-            )
-            f.write(f"Average Win Rate: {results_df['overall_win_rate'].mean():.2f}%\n")
-            f.write(f"Average Long Trades: {results_df['long_trades'].mean():.2f}\n")
-            f.write(
-                f"Average Long Win Rate: {results_df['long_win_rate'].mean():.2f}%\n"
-            )
-            f.write(
-                f"Average Long Profit: {results_df['long_avg_profit'].mean():.2f}%\n"
-            )
-            f.write(f"Average Short Trades: {results_df['short_trades'].mean():.2f}\n")
-            f.write(
-                f"Average Short Win Rate: {results_df['short_win_rate'].mean():.2f}%\n"
-            )
-            f.write(
-                f"Average Short Profit: {results_df['short_avg_profit'].mean():.2f}%\n"
-            )
-            f.write(
-                f"Average Forced Closes: {results_df['forced_closes'].mean():.2f}\n"
-            )
-            f.write(f"Average Sharpe Ratio: {results_df['sharpe_ratio'].mean():.2f}\n")
-            f.write(f"Average Max Drawdown: {results_df['max_drawdown'].mean():.2f}%\n")
+                # 保存多空策略对比
+                if not long_short_compare.empty:
+                    f.write("\n----- Long vs Short Strategy Performance -----\n")
 
-            f.write(f"\n回测结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("\n--- Coins Better for Long Trading ---\n")
+                    f.write(
+                        long_short_compare.head(10)[
+                            [
+                                "symbol",
+                                "long_avg_profit",
+                                "long_win_rate",
+                                "short_avg_profit",
+                                "short_win_rate",
+                                "long_short_diff",
+                            ]
+                        ].to_string()
+                        + "\n\n"
+                    )
 
-            # Add execution time
-            execution_time = time.time() - start_time
-            f.write(
-                f"\n总执行时间: {execution_time:.2f} 秒 ({execution_time/60:.2f} 分钟)\n"
-            )
+                    f.write("\n--- Coins Better for Short Trading ---\n")
+                    f.write(
+                        long_short_compare.tail(10)[
+                            [
+                                "symbol",
+                                "long_avg_profit",
+                                "long_win_rate",
+                                "short_avg_profit",
+                                "short_win_rate",
+                                "long_short_diff",
+                            ]
+                        ].to_string()
+                        + "\n\n"
+                    )
+
+                f.write("\n----- Average Performance -----\n")
+                f.write(
+                    f"Average Total Return: {results_df['total_return'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Buy & Hold Return: {results_df['buy_hold_return'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Outperformance: {results_df['outperformance'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Number of Trades: {results_df['num_trades'].mean():.2f}\n"
+                )
+                f.write(
+                    f"Average Win Rate: {results_df['overall_win_rate'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Long Trades: {results_df['long_trades'].mean():.2f}\n"
+                )
+                f.write(
+                    f"Average Long Win Rate: {results_df['long_win_rate'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Long Profit: {results_df['long_avg_profit'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Short Trades: {results_df['short_trades'].mean():.2f}\n"
+                )
+                f.write(
+                    f"Average Short Win Rate: {results_df['short_win_rate'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Short Profit: {results_df['short_avg_profit'].mean():.2f}%\n"
+                )
+                f.write(
+                    f"Average Forced Closes: {results_df['forced_closes'].mean():.2f}\n"
+                )
+                f.write(
+                    f"Average Sharpe Ratio: {results_df['sharpe_ratio'].mean():.2f}\n"
+                )
+                f.write(
+                    f"Average Max Drawdown: {results_df['max_drawdown'].mean():.2f}%\n"
+                )
+
+                f.write(
+                    f"\n回测结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+
+                # Add execution time
+                execution_time = time.time() - start_time
+                f.write(
+                    f"\n总执行时间: {execution_time:.2f} 秒 ({execution_time/60:.2f} 分钟)\n"
+                )
+                f.write(
+                    f"平均每个文件处理时间: {execution_time/len(csv_files):.2f} 秒\n"
+                )
+                f.write(f"总处理文件数: {len(csv_files)}\n")
+                f.write(f"有效结果数: {len(results)}\n")
 
     # Print execution time
     execution_time = time.time() - start_time
@@ -952,6 +1203,8 @@ def main():
         f"\nTotal execution time: {execution_time:.2f} seconds ({execution_time/60:.2f} minutes)"
     )
     print(f"Average time per file: {execution_time/len(csv_files):.2f} seconds")
+    print(f"Total files processed: {len(csv_files)}")
+    print(f"Valid results: {len(results)}")
 
 
 if __name__ == "__main__":

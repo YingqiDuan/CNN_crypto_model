@@ -10,12 +10,12 @@ def job():
 
 
 # 定义每天运行时间
-schedule.every().day.at("03:30").do(job)
-schedule.every().day.at("07:30").do(job)
-schedule.every().day.at("11:30").do(job)
-schedule.every().day.at("15:30").do(job)
-schedule.every().day.at("19:30").do(job)
-schedule.every().day.at("23:30").do(job)
+schedule.every().day.at("04:30").do(job)
+schedule.every().day.at("08:30").do(job)
+schedule.every().day.at("12:30").do(job)
+schedule.every().day.at("16:30").do(job)
+schedule.every().day.at("20:30").do(job)
+schedule.every().day.at("24:30").do(job)
 
 while True:
     schedule.run_pending()

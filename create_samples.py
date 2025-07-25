@@ -15,7 +15,7 @@ def main():
         # 获取原文件名的 stem（不包含后缀）
         stem = csv_path.stem
         # 创建新的文件名，添加 '_samples_with_labels.pkl'
-        diff = 0.006
+        diff = 0.05
         new_filename = stem + f"_samples_with_labels_{diff}.pkl"
         # 使用 with_name 方法替换文件名
         save_path = csv_path.with_name(new_filename)
